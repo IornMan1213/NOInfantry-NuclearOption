@@ -70,3 +70,18 @@ We hijack it rather than spawning a new unit type (no prefab/network registratio
 - Default M4 (AssaultRifle2_1): scale 0.1625, sight height 0.071 m, eye 0.47 m behind front post (~8 cm behind rear sight).
 - ADS now: sway/bob ~10%, rotations 0, recoil straight back only.
 - Blender 5.2 can't read files under the app's virtualised AppData; stage in ~/noinfantry-tmp for renders.
+
+## 2026-10-02 v0.3 combined arms
+- User: viewmodel works; asked for polish + ground/sea/air combat.
+- Sea: `ShipAI` (MonoBehaviour, subclasses AssaultCarrierAI/LandingCraftAI) writes `Ship.GetInputs()` in Update;
+  disable it and write throttle/steering. `ShipPropulsion` applies `steering * steeringThrust` sideways at the stern,
+  so right turn = negative steering. Pilot rides at its boarding point on deck (ship local space).
+- Air (ground->air): `GameplayUI` private `aircraftSelectionMenu` prefab + public `gameplayCanvas`;
+  Instantiate + `AircraftSelectionMenu.Initialize(localPlayer, airbase)` like `GameplayUI.SelectAircraft`.
+  When `GameManager.GetLocalAircraft` returns a non-ejected live aircraft we exit without touching the camera and
+  return the pilot (Returned + destroy) if at a friendly airbase.
+- Air (anti-air): Launcher picks from `Encyclopedia.i.weaponMounts` (info.missile, weaponPrefab has Missile):
+  AA = antiAir>=0.5, prefer minIR>0, lightest; AT = antiSurface>=0.5, not laser-guided preferred, lightest.
+  Spawned with `Spawner.SpawnMissile(prefab, pos, rot, vel, target, owner=pilot)` (server only). Candidates logged.
+- AirbaseServices bypass flag lets our own airbase check skip the AnyNearAirbase lie.
+- Load test v0.3.0: clean. In-mission untested: ship steering sign, missile behaviour with a pilot as owner.
