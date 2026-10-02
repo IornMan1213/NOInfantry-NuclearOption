@@ -31,9 +31,15 @@ We hijack it rather than spawning a new unit type (no prefab/network registratio
 - Input: Rewired (`GameManager.playerInput`), legacy `Input` also works (game uses `Input.GetKey(KeyCode.LeftShift)`).
 
 ## Log
-- 2026-10-02: recon, design, v0.1 scaffold written; builds clean (dotnet build -c Release -o bin/out). Not yet run in game.
+- 2026-10-02: recon, design, v0.1 scaffold written; builds clean (dotnet build -c Release -o bin/out).
+- 2026-10-02: build now auto-deploys to `<game>\BepInEx\plugins\NOInfantry\` (user asked for this).
+  Added: borrowed gun sounds + impact FX (smallest-pierce `Gun` prefab via Resources.FindObjectsOfTypeAll, private
+  fields `fireSounds`, `impactEffectGround/Armor/Water`; pooled via `ParticleEffectManager.GetPrefabEffect`),
+  grenades (G; `DamageEffects.BlastFrag` + `Explosion.SimulateForce`, visuals from smallest-yield `Missile.warhead.terrainEffect`),
+  airbase auto-return blocked (prefix `FactionHQ.AnyNearAirbase` only at the controlled pilot's position).
+- 2026-10-02: launched via steam://rungameid/2168680; log shows `NO Infantry 0.1.0 loaded`, no Harmony errors. In-mission behaviour NOT yet verified.
 
 ## Next
 - Build, install to BepInEx/plugins (ask user), verify in a single-player mission: eject, land, walk, shoot a ground unit.
 - Tune damage numbers from logged hits.
-- Then: block airbase auto-return, weapon sound/muzzle FX, ammo/reload, grenades, entering vehicles, MP sync.
+- Then: AI reacting to/targeting infantry, entering ground vehicles, spawning as infantry without a jet, first-person gun model, MP sync.
