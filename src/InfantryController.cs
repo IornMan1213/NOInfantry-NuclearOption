@@ -57,7 +57,7 @@ namespace NOInfantry
         {
             TrackLocalPilot();
             PilotDismounted pilot = cachedPilot;
-            if (Controlled == null && Plugin.DismountKey.Value.IsDown()) TryDismount();
+            if (Controlled == null && InputShim.KeyDown(Plugin.DismountKey.Value.MainKey)) TryDismount();
 
             // Back in the air through the game's own spawn menu: hand the camera over and return the soldier.
             if (Controlled != null && AirbaseServices.HasNewAircraft())
@@ -80,7 +80,7 @@ namespace NOInfantry
                 LeaveVehicle();
             }
 
-            if (pilot != null && Plugin.ToggleKey.Value.IsDown())
+            if (pilot != null && InputShim.KeyDown(Plugin.ToggleKey.Value.MainKey))
             {
                 if (Controlled == pilot)
                 {
@@ -248,7 +248,23 @@ namespace NOInfantry
             }
         }
 
-        private bool InputAllowed => Cursor.lockState == CursorLockMode.Locked;
+        private bool InputAllowed => InputShim.Scripted || Cursor.lockState == CursorLockMode.Locked;
+
+        // ---- Hooks for the automated test ----
+        internal int ShotsFired => shotsFired;
+        internal int Hits => hits;
+        internal int Grenades => grenades;
+        internal Launcher ActiveLauncher => launcher;
+
+        internal void AimAt(Vector3 worldPoint)
+        {
+            Camera eye = SceneSingleton<CameraStateManager>.i.mainCamera;
+            Vector3 d = worldPoint - eye.transform.position;
+            camState.Yaw = Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg;
+            camState.Pitch = -Mathf.Atan2(d.y, new Vector2(d.x, d.z).magnitude) * Mathf.Rad2Deg;
+        }
+
+        internal float Yaw => camState.Yaw;
 
         private void ReadInput()
         {
@@ -259,14 +275,14 @@ namespace NOInfantry
             if (!InputAllowed) return;
 
             // Mouse look
-            Aiming = Input.GetMouseButton(1);
+            Aiming = InputShim.Mouse(1);
             Vector2 look = ReadMouse() * Plugin.MouseSensitivity.Value;
             if (Aiming) look *= 0.5f;
             lastLook = look;
             camState.Yaw += look.x;
             camState.Pitch = Mathf.Clamp(camState.Pitch - look.y, -85f, 85f);
 
-            if (Input.GetKeyDown(Plugin.UseKey.Value))
+            if (InputShim.KeyDown(Plugin.UseKey.Value))
             {
                 if (VehicleControl.Driven != null) { LeaveVehicle(); return; }
                 Unit gv = VehicleControl.FindEnterable(Controlled);
@@ -279,39 +295,39 @@ namespace NOInfantry
             }
 
             // Movement
-            if (Input.GetKey(KeyCode.W)) moveInput.y += 1f;
-            if (Input.GetKey(KeyCode.S)) moveInput.y -= 1f;
-            if (Input.GetKey(KeyCode.D)) moveInput.x += 1f;
-            if (Input.GetKey(KeyCode.A)) moveInput.x -= 1f;
+            if (InputShim.Key(KeyCode.W)) moveInput.y += 1f;
+            if (InputShim.Key(KeyCode.S)) moveInput.y -= 1f;
+            if (InputShim.Key(KeyCode.D)) moveInput.x += 1f;
+            if (InputShim.Key(KeyCode.A)) moveInput.x -= 1f;
             moveInput = Vector2.ClampMagnitude(moveInput, 1f);
-            sprint = Input.GetKey(KeyCode.LeftShift) && moveInput.y > 0f;
-            if (Input.GetKeyDown(KeyCode.Space)) jumpQueued = true;
+            sprint = InputShim.Key(KeyCode.LeftShift) && moveInput.y > 0f;
+            if (InputShim.KeyDown(KeyCode.Space)) jumpQueued = true;
 
             // Weapons
-            if (Input.GetKeyDown(KeyCode.Alpha1)) SelectWeapon(Weapon.Rifle);
-            if (Input.GetKeyDown(KeyCode.Alpha2)) SelectWeapon(Weapon.Launcher);
-            float scroll = Input.mouseScrollDelta.y;
+            if (InputShim.KeyDown(KeyCode.Alpha1)) SelectWeapon(Weapon.Rifle);
+            if (InputShim.KeyDown(KeyCode.Alpha2)) SelectWeapon(Weapon.Launcher);
+            float scroll = InputShim.Scroll;
             if (scroll != 0f) SelectWeapon(weapon == Weapon.Rifle ? Weapon.Launcher : Weapon.Rifle);
-            if (Input.GetKeyDown(KeyCode.G) && grenades > 0) ThrowGrenade();
+            if (InputShim.KeyDown(KeyCode.G) && grenades > 0) ThrowGrenade();
 
             // Ground -> air
-            if (Input.GetKeyDown(Plugin.BoardKey.Value) && nearbyAirbase != null) AirbaseServices.OpenAircraftMenu(nearbyAirbase);
+            if (InputShim.KeyDown(Plugin.BoardKey.Value) && nearbyAirbase != null) AirbaseServices.OpenAircraftMenu(nearbyAirbase);
 
             if (weapon == Weapon.Launcher)
             {
                 Camera eye = SceneSingleton<CameraStateManager>.i.mainCamera;
-                launcher.Tick(Controlled, eye, seeking: Aiming, fire: Input.GetMouseButtonDown(0));
+                launcher.Tick(Controlled, eye, seeking: Aiming, fire: InputShim.MouseDown(0));
                 return;
             }
 
             // Rifle
-            if (Input.GetKeyDown(KeyCode.R)) StartReload();
+            if (InputShim.KeyDown(KeyCode.R)) StartReload();
             if (reloadDoneTime > 0f && Time.time >= reloadDoneTime)
             {
                 ammo = Plugin.MagazineSize.Value;
                 reloadDoneTime = 0f;
             }
-            if (Input.GetMouseButton(0) && Time.time >= nextShotTime && reloadDoneTime == 0f)
+            if (InputShim.Mouse(0) && Time.time >= nextShotTime && reloadDoneTime == 0f)
             {
                 if (ammo > 0) Fire();
                 else StartReload();
@@ -328,14 +344,14 @@ namespace NOInfantry
         private void ReadVehicleInput()
         {
             float throttle = 0f, steer = 0f;
-            if (Input.GetKey(KeyCode.W)) throttle += 1f;
-            if (Input.GetKey(KeyCode.S)) throttle -= 1f;
-            if (Input.GetKey(KeyCode.D)) steer += 1f;
-            if (Input.GetKey(KeyCode.A)) steer -= 1f;
+            if (InputShim.Key(KeyCode.W)) throttle += 1f;
+            if (InputShim.Key(KeyCode.S)) throttle -= 1f;
+            if (InputShim.Key(KeyCode.D)) steer += 1f;
+            if (InputShim.Key(KeyCode.A)) steer -= 1f;
             if (VehicleControl.Driven.speed < -0.5f) steer = -steer; // steer like a car when reversing
             VehicleControl.Throttle = throttle;
             VehicleControl.Steering = steer;
-            if (Input.GetMouseButton(0)) VehicleControl.FireHeld();
+            if (InputShim.Mouse(0)) VehicleControl.FireHeld();
         }
 
         private void EnterVehicle(Unit gv)
@@ -382,6 +398,7 @@ namespace NOInfantry
 
         private Vector2 ReadMouse()
         {
+            if (InputShim.Scripted) return Vector2.zero;
             try
             {
                 return new Vector2(Input.GetAxisRaw("Mouse X"), Input.GetAxisRaw("Mouse Y"));

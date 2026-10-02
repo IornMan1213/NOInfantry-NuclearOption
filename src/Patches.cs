@@ -43,6 +43,17 @@ namespace NOInfantry
             __result = new OpportunityThreat(Plugin.AiInfantryPriority.Value * (1f - targetDistance / range), __result.threat);
         }
 
+        // Diagnostics for launcher missiles: log how and where they end.
+        [HarmonyPatch(typeof(Missile), nameof(Missile.Detonate))]
+        [HarmonyPrefix]
+        private static void MissileDetonatePrefix(Missile __instance, bool hitArmor, bool hitTerrain)
+        {
+            if (!Launcher.Launched.TryGetValue(__instance, out Unit target)) return;
+            Launcher.Launched.Remove(__instance);
+            float dist = target != null ? Vector3.Distance(__instance.transform.position, target.transform.position) : -1f;
+            Plugin.Log.LogInfo($"Launcher missile {__instance.definition?.unitName} detonating: armed={__instance.IsArmed()} hitArmor={hitArmor} hitTerrain={hitTerrain} distToTarget={dist:F1} m target={target?.unitName}");
+        }
+
         // PilotDismounted.CheckForCapture "returns" a landed pilot to base (destroying it) when near a
         // friendly airbase. Only lie for the controlled pilot's exact position; every other caller is untouched.
         [HarmonyPatch(typeof(FactionHQ), nameof(FactionHQ.AnyNearAirbase))]

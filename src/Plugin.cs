@@ -105,7 +105,7 @@ namespace NOInfantry
             GrenadeThrowSpeed = Config.Bind("Grenades", "ThrowSpeed", 16f, "m/s");
 
             UseKey = Config.Bind("Vehicles", "UseKey", KeyCode.E, "Enter / leave a friendly ground vehicle");
-            EnterDistance = Config.Bind("Vehicles", "EnterDistance", 4f, "Metres from the vehicle's hull you can climb in");
+            EnterDistance = Config.Bind("Vehicles", "EnterDistance", 5f, "Metres from the vehicle's hull you can climb in");
             VehicleCamDistance = Config.Bind("Vehicles", "CameraDistance", 6f, "Extra third-person camera distance");
             AllowVehicleMissiles = Config.Bind("Vehicles", "AllowMissiles", false, "Let LMB fire non-gun turret weapons (unguided, experimental)");
 
@@ -143,6 +143,11 @@ namespace NOInfantry
             DontDestroyOnLoad(host);
             host.hideFlags = HideFlags.HideAndDontSave;
             host.AddComponent<InfantryController>();
+            if (AutoTest.Requested)
+            {
+                Log.LogWarning("-noiAutotest given: running the automated in-game test, the game will quit when done");
+                host.AddComponent<AutoTest>();
+            }
 
             Log.LogInfo($"{Name} {Version} loaded");
         }

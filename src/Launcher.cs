@@ -11,6 +11,8 @@ namespace NOInfantry
     internal class Launcher
     {
         internal int Ammo;
+        internal static Missile LastLaunched;
+        internal static readonly Dictionary<Missile, Unit> Launched = new Dictionary<Missile, Unit>();
         internal Unit LockTarget { get; private set; }
         internal float LockProgress { get; private set; }
         internal bool Locked => LockTarget != null && LockProgress >= 1f;
@@ -172,6 +174,8 @@ namespace NOInfantry
             Vector3 dir = (eye.forward + Vector3.up * (air ? 0.08f : 0.03f)).normalized;
             Vector3 vel = self.rb.velocity + dir * Plugin.LauncherEjectSpeed.Value;
             Missile m = NetworkSceneSingleton<Spawner>.i.SpawnMissile(prefab, pos, Quaternion.LookRotation(dir), vel, target, self);
+            LastLaunched = m;
+            if (m != null) Launched[m] = target;
             Ammo--;
             nextShotTime = Time.time + Plugin.LauncherReload.Value;
             Plugin.Log.LogInfo($"Launched {m?.definition?.unitName} at {target.unitName} ({Vector3.Distance(pos, target.transform.position):F0} m)");
@@ -193,15 +197,26 @@ namespace NOInfantry
                 if (dist > maxRange || dist < 30f) continue;
                 float angle = Vector3.Angle(eye.forward, to);
                 if (angle > bestAngle) continue;
-                if (Physics.Linecast(eye.position, u.transform.position, out RaycastHit hit, PhysicsLayers.StaticsMask)
-                    && hit.distance < dist - u.maxRadius - 2f)
-                {
-                    continue; // terrain/buildings in the way
-                }
+                if (!HasLineOfSight(eye.position, u, self)) continue;
                 bestAngle = angle;
                 best = u;
             }
             return best;
+        }
+
+        // Anything solid between us and the target (terrain, walls, hangars, other vehicles) blocks the lock;
+        // checking only the terrain layer let the AT missile lock through a blast wall and hit it.
+        private static bool HasLineOfSight(Vector3 from, Unit target, PilotDismounted self)
+        {
+            Vector3 to = target.transform.position - from;
+            foreach (RaycastHit h in Physics.RaycastAll(from, to.normalized, to.magnitude, ~(int)PhysicsLayers.ExclusionZonesMask, QueryTriggerInteraction.Ignore))
+            {
+                Transform t = h.collider.transform;
+                if (t.IsChildOf(target.transform) || t.IsChildOf(self.transform)) continue;
+                if (h.distance > to.magnitude - target.maxRadius) continue;
+                return false;
+            }
+            return true;
         }
 
         internal void DrawHud(Camera cam)

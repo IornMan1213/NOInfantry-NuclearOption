@@ -7,6 +7,7 @@ namespace NOInfantry
     internal class Grenade : MonoBehaviour
     {
         private static Material material;
+        internal static int Detonations;
 
         private PersistentID thrower;
         private float fuse;
@@ -64,6 +65,7 @@ namespace NOInfantry
                 Explosion.SimulateForce(blastPos, yield);
             }
             BorrowedAssets.PlayBlast(pos, normal, onGround);
+            Detonations++;
             Plugin.Log.LogInfo($"Grenade detonated at {pos} (yield {yield})");
             Destroy(gameObject);
         }
