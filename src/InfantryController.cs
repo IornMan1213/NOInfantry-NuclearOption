@@ -35,6 +35,8 @@ namespace NOInfantry
         private bool loggedMouseFallback;
         private int grenades;
         private AudioSource audioSource;
+        private ViewModel viewModel;
+        private Vector2 lastLook;
 
         private void Awake()
         {
@@ -45,6 +47,7 @@ namespace NOInfantry
         {
             TrackLocalPilot();
             PilotDismounted pilot = cachedPilot;
+            if (Controlled == null && Plugin.DismountKey.Value.IsDown()) TryDismount();
 
             // (object) cast: a destroyed pilot compares == null under Unity rules but the reference is still set.
             if ((object)Controlled != null && (Controlled == null || Controlled.disabled))
@@ -76,7 +79,25 @@ namespace NOInfantry
             {
                 KeepCamera();
                 ReadInput();
+                if (viewModel != null)
+                {
+                    float speed = new Vector2(Controlled.rb.velocity.x, Controlled.rb.velocity.z).magnitude;
+                    viewModel.Tick(Aiming, sprint, reloadDoneTime > 0f, grounded ? speed : 0f, lastLook);
+                }
             }
+        }
+
+        // Climb out of a stopped aircraft: the game's own ejection does a ground bail-out when speed < 10 m/s.
+        private static void TryDismount()
+        {
+            if (!GameManager.GetLocalAircraft(out Aircraft aircraft) || aircraft.disabled || aircraft.HasEjected()) return;
+            if (aircraft.speed > 10f || aircraft.radarAlt > aircraft.definition.spawnOffset.y + 3f)
+            {
+                Plugin.Log.LogInfo($"Dismount refused: speed {aircraft.speed:F1} m/s, radar alt {aircraft.radarAlt:F1} m");
+                return;
+            }
+            Plugin.Log.LogInfo($"Dismounting from {aircraft.unitName}");
+            aircraft.StartEjectionSequence();
         }
 
         private void TrackLocalPilot()
@@ -134,6 +155,14 @@ namespace NOInfantry
                 hiddenRenderers.Add(r);
             }
 
+            Shader fallback = null;
+            foreach (Renderer r in hiddenRenderers)
+            {
+                if (r.sharedMaterial != null) { fallback = r.sharedMaterial.shader; break; }
+            }
+            if (viewModel != null) Destroy(viewModel.gameObject);
+            viewModel = ViewModel.Create(cam.mainCamera, fallback);
+
             ammo = Plugin.MagazineSize.Value;
             reloadDoneTime = 0f;
             grenades = Plugin.GrenadeCount.Value;
@@ -163,6 +192,8 @@ namespace NOInfantry
                 if (r != null) r.shadowCastingMode = ShadowCastingMode.On;
             }
             hiddenRenderers.Clear();
+            if (viewModel != null) Destroy(viewModel.gameObject);
+            viewModel = null;
 
             CameraStateManager cam = SceneSingleton<CameraStateManager>.i;
             if (cam != null && cam.currentState == camState)
@@ -190,11 +221,14 @@ namespace NOInfantry
             moveInput = Vector2.zero;
             sprint = false;
             Aiming = false;
+            lastLook = Vector2.zero;
             if (!InputAllowed) return;
 
             // Mouse look
+            Aiming = Input.GetMouseButton(1);
             Vector2 look = ReadMouse() * Plugin.MouseSensitivity.Value;
             if (Aiming) look *= 0.5f;
+            lastLook = look;
             camState.Yaw += look.x;
             camState.Pitch = Mathf.Clamp(camState.Pitch - look.y, -85f, 85f);
 
@@ -208,7 +242,6 @@ namespace NOInfantry
             if (Input.GetKeyDown(KeyCode.Space)) jumpQueued = true;
 
             // Rifle
-            Aiming = Input.GetMouseButton(1);
             if (Input.GetKeyDown(KeyCode.R)) StartReload();
             if (reloadDoneTime > 0f && Time.time >= reloadDoneTime)
             {
@@ -267,6 +300,7 @@ namespace NOInfantry
                 audioSource.PlayOneShot(shots[Random.Range(0, shots.Length)], Plugin.RifleVolume.Value);
             }
 
+            viewModel?.OnFire(Aiming);
             Vector3 end = origin + dir * Plugin.Range.Value;
             if (Raycast(origin, dir, pilot, out RaycastHit hit))
             {
@@ -276,7 +310,8 @@ namespace NOInfantry
                 BorrowedAssets.PlayImpact(hit.point, hit.normal, dir, armor, water);
                 if (!water) ApplyHit(pilot, hit, dir);
             }
-            Tracer.Spawn(origin + dir * 1.5f - Vector3.up * 0.1f, end);
+            Vector3 tracerStart = viewModel != null ? viewModel.Muzzle.position : origin + dir * 1.5f - Vector3.up * 0.1f;
+            Tracer.Spawn(tracerStart, end);
         }
 
         private void ThrowGrenade()
@@ -385,8 +420,8 @@ namespace NOInfantry
             float cy = Screen.height * 0.5f;
             Color prev = GUI.color;
 
-            GUI.color = Time.time < hitMarkerUntil ? Color.red : new Color(1f, 1f, 1f, 0.85f);
-            float gap = Aiming ? 3f : 6f;
+            GUI.color = Time.time < hitMarkerUntil ? Color.red : new Color(1f, 1f, 1f, Aiming ? 0f : 0.85f);
+            float gap = 6f;
             GUI.DrawTexture(new Rect(cx - gap - 8f, cy - 1f, 8f, 2f), Texture2D.whiteTexture);
             GUI.DrawTexture(new Rect(cx + gap, cy - 1f, 8f, 2f), Texture2D.whiteTexture);
             GUI.DrawTexture(new Rect(cx - 1f, cy - gap - 8f, 2f, 8f), Texture2D.whiteTexture);

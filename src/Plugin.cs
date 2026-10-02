@@ -18,6 +18,7 @@ namespace NOInfantry
         // Controls
         internal static ConfigEntry<KeyboardShortcut> ToggleKey;
         internal static ConfigEntry<bool> AutoEnter;
+        internal static ConfigEntry<KeyboardShortcut> DismountKey;
         internal static ConfigEntry<float> MouseSensitivity;
         internal static ConfigEntry<float> Fov;
         internal static ConfigEntry<float> AdsFov;
@@ -49,6 +50,7 @@ namespace NOInfantry
             Log = Logger;
 
             ToggleKey = Config.Bind("Controls", "ToggleKey", new KeyboardShortcut(KeyCode.F7), "Enter/exit first-person infantry mode while dismounted");
+            DismountKey = Config.Bind("Controls", "DismountKey", new KeyboardShortcut(KeyCode.F8), "Climb out of your aircraft when stopped on the ground (start a mission on foot)");
             AutoEnter = Config.Bind("Controls", "AutoEnter", true, "Automatically take control once your ejected pilot lands");
             MouseSensitivity = Config.Bind("Controls", "MouseSensitivity", 2f, "Mouse look sensitivity");
             Fov = Config.Bind("Controls", "FOV", 75f, "Field of view on foot");
