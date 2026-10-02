@@ -85,3 +85,30 @@ We hijack it rather than spawning a new unit type (no prefab/network registratio
   Spawned with `Spawner.SpawnMissile(prefab, pos, rot, vel, target, owner=pilot)` (server only). Candidates logged.
 - AirbaseServices bypass flag lets our own airbase check skip the AnyNearAirbase lie.
 - Load test v0.3.0: clean. In-mission untested: ship steering sign, missile behaviour with a pilot as owner.
+
+## 2026-10-02 v0.4 automated testing (user away)
+- Built `AutoTest` (`-noiAutotest`) + `InputShim`: game's own `-autoHost -state SinglePlayer -mission <name>` loads a
+  mission with no menus; harness joins a faction via `LeaderboardMenu.JoinFactionCallback` (closes the join panel),
+  spawns its soldier with `Spawner.SpawnPilot` + `Networkplayer = localPlayer`, spawns targets with SpawnVehicle /
+  SpawnShip / SpawnAircraft, writes BepInEx/NOInfantry_autotest.txt + screenshots, quits.
+- Bugs it found and fixed:
+  1. Optical AT missiles flew blind: `OpticalSeeker.Initialize` starts from `NetworkHQ.TryGetKnownPosition`; the soldier
+     now spots locked targets (`FactionHQ.RpcUpdateTrackingInfo`) and keeps spotting for 30 s after launch.
+  2. AT-145 passed 1 m from a truck without impact; launcher arms the game's proximity fuse (`Missile.SetProxyFuse`) on
+     surface targets -> kills.
+  3. Lock check only tested StaticsMask; locked through a blast wall. Now full raycast ignoring self/target.
+  4. Driven turrets: idle turrets disable themselves, moving vehicles stow them (DeployablePart, StowForward pins them),
+     and AimTurret sets `Safety = !onTarget` (<1 deg). Now: keep enabled, unstow each step, ballistic aim
+     (low-arc solution from muzzleVelocity/gravMult), safety within 5 deg (with safety OFF a GMG fired into its own
+     hull and wrecked the APC).
+  5. Vehicle aim ray hit vehicle colliders not parented under the root and the seated soldier: skip by unit/rb and
+     ignore hits nearer than the vehicle.
+  6. Viewmodel sprint/reload poses pivoted at the eye and left the screen; now pivot at the grip with muzzle-up cants.
+  7. EnterDistance 4 -> 5 m.
+- Ship steering sign confirmed in game: D = right turn (yaw +40 deg in 10 s), 15 m/s.
+- AircraftSelectionMenu.FlyAircraft refuses unowned airframes ("player doesn't own"), i.e. game economy; harness falls
+  back to a direct SpawnAircraft to test the hand-off.
+- Not ours: "NullReferenceException in SlowUpdate ... GroundVehicle.CheckObstacles" floods start right after the faction
+  join in Free Flight Ignus, before any harness spawns (mission vehicles with null NetworkHQ). Absent in the user's
+  normal session log.
+- Result: 20/20 PASS.

@@ -144,24 +144,16 @@ namespace NOInfantry
         internal static void FireHeld()
         {
             if (Driven == null) return;
-            if (Time.time >= nextFireDiag && Turrets.Exists(t => t != null && t.GetWeapon() != null && t.GetWeapon().Safety))
+            // One line per second when the safety is holding fire, so "my gun won't shoot" is explainable from the log.
+            if (Time.time >= nextFireDiag)
             {
-                nextFireDiag = Time.time + 1f;
                 foreach (Turret t in Turrets)
                 {
-                    WeaponStation ws = t.GetWeaponStation();
-                    if (ws == null) continue;
-                    foreach (Weapon w in ws.Weapons)
-                    {
-                        if (w == null) continue;
-                        var tr = Traverse.Create(w);
-                        float err = Mathf.Abs(traverseErrorRef(t)) + Mathf.Abs(elevationErrorRef(t));
-                        var tt = Traverse.Create(t);
-                        Plugin.Log.LogInfo($"[fire] aim point {Vector3.Distance(w.transform.position, AimPoint):F0} m away, unit {AimUnit?.unitName}");
-                        Plugin.Log.LogInfo($"[fire] turret trav={traverseErrorRef(t):F1} elev={elevationErrorRef(t):F1} minElev={tt.Field("minElevation").GetValue()} maxElev={tt.Field("maxElevation").GetValue()} travRange={tt.Field("traverseRange").GetValue()} v={ws.WeaponInfo?.muzzleVelocity} grav={ws.WeaponInfo?.gravMult}");
-                        Plugin.Log.LogInfo($"[fire] {ws.WeaponInfo?.weaponName} {w.GetType().Name} safety={w.Safety} turretEnabled={t.enabled} aimError={err:F1} stationAmmo={ws.Ammo} " +
-                            $"loaded={tr.Field("bulletsLoaded").GetValue()} reload={tr.Field("timeUntilReload").GetValue()} attached={w.IsAttached()}");
-                    }
+                    Weapon w = t != null ? t.GetWeapon() : null;
+                    if (w == null || !w.Safety) continue;
+                    nextFireDiag = Time.time + 1f;
+                    float err = Mathf.Abs(traverseErrorRef(t)) + Mathf.Abs(elevationErrorRef(t));
+                    Plugin.Log.LogInfo($"[fire] {t.GetWeaponStation()?.WeaponInfo?.weaponName} held by safety: barrel {err:F1} deg off the aim point (limit {Plugin.TurretFireTolerance.Value})");
                 }
             }
             foreach (Turret t in Turrets)

@@ -255,6 +255,7 @@ namespace NOInfantry
         internal int Hits => hits;
         internal int Grenades => grenades;
         internal Launcher ActiveLauncher => launcher;
+        internal ViewModel ActiveViewModel => viewModel;
 
         internal void AimAt(Vector3 worldPoint)
         {

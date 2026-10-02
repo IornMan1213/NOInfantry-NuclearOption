@@ -46,6 +46,20 @@ RMB zooms, E gets out.
 - Sounds and effects are borrowed at runtime from the game's own assets; no game files are shipped.
 - Built with AI assistance (Claude Code).
 
+## Automated in-game test
+The mod contains a self-test that drives the soldier through every feature without touching your
+mouse or keyboard, then quits:
+
+```
+NuclearOption.exe -autoHost -state SinglePlayer -mission "Free Flight - Ignus Archipelago" -noiAutotest -screen-fullscreen 0
+```
+
+Results go to `BepInEx/NOInfantry_autotest.txt` and screenshots to `BepInEx/NOInfantry_shots/`.
+It covers: spawn on foot, walk/sprint/jump, rifle hits, grenade, launcher vs ground and air targets
+(lock, launch, damage), driving and firing a ground vehicle, a ship's helm (throttle, steering direction,
+leaving the helm), the airbase aircraft menu, the hand-off when a new aircraft spawns, and F8 dismount.
+Current result: 20/20 passing (v0.4.0).
+
 ## Build
 `dotnet build -c Release` (edit `NuclearOptionPath` in `NOInfantry.csproj`). The build copies the DLL and
 `models/` into the game's plugins folder.

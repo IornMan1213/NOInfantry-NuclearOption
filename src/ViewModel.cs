@@ -10,9 +10,15 @@ namespace NOInfantry
     // so the aim pose is simply (0, -sightHeight, 0) and the front sight tip lands exactly on screen centre.
     internal class ViewModel : MonoBehaviour
     {
-        private static readonly Vector3 HipOffset = new Vector3(0.13f, -0.13f, 0.10f);   // added to the aim pose
-        private static readonly Vector3 SprintOffset = new Vector3(0.08f, -0.18f, 0.04f);
-        private static readonly Vector3 SprintRot = new Vector3(15f, -35f, 10f);
+        private static readonly Vector3 HipOffset = new Vector3(0.12f, -0.09f, -0.04f);   // added to the aim pose
+        private static readonly Vector3 SprintOffset = new Vector3(0.06f, -0.08f, -0.03f);
+        private static readonly Vector3 SprintRot = new Vector3(-12f, -30f, 18f);
+        private static readonly Vector3 ReloadRot = new Vector3(-14f, 10f, -32f);
+        private static readonly Vector3 ReloadOffset = new Vector3(0f, -0.02f, -0.02f);
+
+        // Rotations pivot around the pistol grip (rifle-local), not the eye point the rifle is built around;
+        // pivoting at the eye swung a 60 cm rifle straight out of view when sprinting/reloading.
+        private static readonly Vector3 GripPivot = new Vector3(0f, -0.08f, 0.04f);
 
         internal Transform Muzzle { get; private set; }
 
@@ -198,14 +204,16 @@ namespace NOInfantry
 
             Vector3 pos = AimPos + HipOffset * hip;
             pos = Vector3.Lerp(pos, AimPos + SprintOffset, sprintBlend);
+            pos += ReloadOffset * reloadBlend;
             pos += (new Vector3(sway.x, sway.y, 0f) + bob) * (0.1f + 0.9f * hip)
-                   + recoilPos
-                   + new Vector3(0f, -0.08f, -0.05f) * reloadBlend;
+                   + recoilPos;
             transform.localPosition = pos;
 
-            Vector3 rot = SprintRot * sprintBlend + recoilRot + new Vector3(35f, 0f, -25f) * reloadBlend
+            Vector3 rot = SprintRot * sprintBlend + recoilRot + ReloadRot * reloadBlend
                           + new Vector3(sway.y * 200f, -sway.x * 200f, sway.x * 300f) * hip;
-            transform.localRotation = Quaternion.Euler(rot);
+            Quaternion q = Quaternion.Euler(rot);
+            transform.localRotation = q;
+            transform.localPosition += GripPivot - q * GripPivot; // keep the grip in place while rotating
 
             bool flashing = Time.time < flashUntil;
             flash.SetActive(flashing);

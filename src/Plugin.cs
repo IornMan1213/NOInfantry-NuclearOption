@@ -11,7 +11,7 @@ namespace NOInfantry
     {
         public const string Guid = "jayea.noinfantry";
         public const string Name = "NO Infantry";
-        public const string Version = "0.3.0";
+        public const string Version = "0.4.0";
 
         internal static ManualLogSource Log;
         internal static string PluginDir;
@@ -77,7 +77,7 @@ namespace NOInfantry
 
             RifleModel = Config.Bind("Viewmodel", "Model", "AssaultRifle2_1.obj", "OBJ file in the plugin's models folder (Quaternius CC0 pack. Iron sights line up on AssaultRifle2_1..4 (M4s) and AssaultRifle_2/4/5 (AKs); AssaultRifle_1/3 sights are obstructed)");
             RifleLength = Config.Bind("Viewmodel", "Length", 0.84f, "Overall rifle length in metres (model is scaled to this)");
-            SightRadius = Config.Bind("Viewmodel", "EyeToFrontSight", 0.47f, "Distance from your eye to the front sight when aiming");
+            SightRadius = Config.Bind("Viewmodel", "EyeToFrontSight", 0.52f, "Distance from your eye to the front sight when aiming");
 
             ToggleKey = Config.Bind("Controls", "ToggleKey", new KeyboardShortcut(KeyCode.F7), "Enter/exit first-person infantry mode while dismounted");
             DismountKey = Config.Bind("Controls", "DismountKey", new KeyboardShortcut(KeyCode.F8), "Climb out of your aircraft when stopped on the ground (start a mission on foot)");

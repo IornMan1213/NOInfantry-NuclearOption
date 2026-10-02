@@ -60,6 +60,14 @@ namespace NOInfantry
 
         private void Shot(string name)
         {
+            ViewModel vm = InfantryController.Instance != null ? InfantryController.Instance.ActiveViewModel : null;
+            Camera cam = SceneSingleton<CameraStateManager>.i != null ? SceneSingleton<CameraStateManager>.i.mainCamera : null;
+            if (vm != null && cam != null && vm.isActiveAndEnabled && name.StartsWith("pose"))
+            {
+                Vector3 muzzle = cam.WorldToViewportPoint(vm.Muzzle.position);
+                Vector3 grip = cam.WorldToViewportPoint(vm.transform.position);
+                Log($"viewmodel {name}: local pos {vm.transform.localPosition} rot {vm.transform.localEulerAngles}; muzzle viewport {muzzle}, root viewport {grip}");
+            }
             string path = Path.Combine(shotDir, $"{++shotIndex:D2}_{name}.png");
             ScreenCapture.CaptureScreenshot(path);
             Log($"screenshot {Path.GetFileName(path)}");
