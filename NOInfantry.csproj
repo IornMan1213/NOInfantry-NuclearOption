@@ -32,6 +32,10 @@
   <Target Name="DeployToPlugins" AfterTargets="Build">
     <MakeDir Directories="$(NuclearOptionPath)\BepInEx\plugins\NOInfantry" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(NuclearOptionPath)\BepInEx\plugins\NOInfantry" />
+    <ItemGroup>
+      <ModelFiles Include="models\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ModelFiles)" DestinationFolder="$(NuclearOptionPath)\BepInEx\plugins\NOInfantry\models\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Message Importance="high" Text="Deployed $(TargetFileName) to $(NuclearOptionPath)\BepInEx\plugins\NOInfantry" />
   </Target>
 

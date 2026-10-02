@@ -59,3 +59,14 @@ We hijack it rather than spawning a new unit type (no prefab/network registratio
 - Build, install to BepInEx/plugins (ask user), verify in a single-player mission: eject, land, walk, shoot a ground unit.
 - Tune damage numbers from logged hits.
 - Then: AI reacting to/targeting infantry, entering ground vehicles, spawning as infantry without a jet, first-person gun model, MP sync.
+
+## 2026-10-02 viewmodel v2
+- User video: ADS sights "move" — primitive rear sight 12 cm from eye filled the screen, and hip sway/bob/roll rotation
+  stayed active while aiming so the front post wandered in the notch.
+- Downloaded (user approved) CC0 packs from opengameart: Quaternius Ultimate Gun Pack (7.4 MB) and Robin Lamb FPS rifle+hands
+  (162 KB; too blocky, unused). Shipped Quaternius AssaultRifle*.obj/mtl in `models/` with CREDITS.txt; downloads gitignored.
+- ObjModel.cs: runtime OBJ/MTL loader. Source guns are +X forward/+Y up; map (x,y,z)->(z,y,x) = handedness flip, keep winding.
+  Bore = centre of muzzle slice; front sight = highest vertex in front half (minus muzzle device); MTL Kd is linear -> gamma.
+- Default M4 (AssaultRifle2_1): scale 0.1625, sight height 0.071 m, eye 0.47 m behind front post (~8 cm behind rear sight).
+- ADS now: sway/bob ~10%, rotations 0, recoil straight back only.
+- Blender 5.2 can't read files under the app's virtualised AppData; stage in ~/noinfantry-tmp for renders.

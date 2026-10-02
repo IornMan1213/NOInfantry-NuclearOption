@@ -1,0 +1,4 @@
+Rifle models: "Ultimate Gun Pack" by Quaternius (July 2019)
+License: CC0 1.0 (public domain) - https://opengameart.org/content/low-poly-guns-pack
+Also available at https://quaternius.itch.io/50-lowpoly-guns
+Unmodified OBJ/MTL exports; loaded at runtime by NO Infantry.
