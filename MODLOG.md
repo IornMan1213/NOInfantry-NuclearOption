@@ -39,6 +39,22 @@ We hijack it rather than spawning a new unit type (no prefab/network registratio
   airbase auto-return blocked (prefix `FactionHQ.AnyNearAirbase` only at the controlled pilot's position).
 - 2026-10-02: launched via steam://rungameid/2168680; log shows `NO Infantry 0.1.0 loaded`, no Harmony errors. In-mission behaviour NOT yet verified.
 
+- 2026-10-02: user played v0.1: "it seems to work". Asked for features in order 4,3,2,1:
+  - #4 first-person rifle: procedural primitives (ViewModel.cs), sway/bob/recoil/ADS/reload/sprint poses, muzzle flash + light.
+  - #3 start on foot: F8 calls `Aircraft.StartEjectionSequence()` when speed < 10 m/s; the game's own ground bail-out
+    (`PilotDismounted.Setup`: speed < 10 or no ejection seat → `ejectionSeat.BailOut`, walk-out spot) does the rest.
+  - #2 vehicles (E): `GroundVehicleJob_Math1.Inputs()` returns early when `fields.mobile == false` but the job still
+    applies `fields.inputs` (throttle/steering/brake) → we write them each physics step. Turret: replace `Turret.FixedUpdate`
+    for our turrets, call private `AimTurret(Vector3)`; fire with `WeaponStation.Fire(vehicle, null)` (guns only by default).
+    Turret's built-in manual mode NREs on ground vehicles (reads `aircraft.LocalSim`).
+  - #1 AI: pilots score 0 in `CombatAI.AnalyzeTarget` (zero-value definition). Postfix gives only the controlled pilot a
+    range-scaled opportunity for gun weapons. Detection itself is generic (TargetDetector.VisualCheck/LoS).
+- 2026-10-02 GOTCHA (crash): a Harmony postfix on `GroundVehicle.UpdateJobFields` (method body uses
+  `PtrAllocation<GroundVehicleFields>`, a `T*` struct) hard-crashed Mono at startup inside MonoMod
+  `MMReflectionImporter` → `RuntimeType.GetElementType`. Never patch methods touching PtrAllocation/Ptr<T>, and don't use
+  FieldRefAccess on them; use plain FieldInfo.GetValue (boxed copy keeps the pointer). Plugin now logs
+  "Applying patches: <class>" before each PatchAll to localise native crashes. Relaunched: loads clean.
+
 ## Next
 - Build, install to BepInEx/plugins (ask user), verify in a single-player mission: eject, land, walk, shoot a ground unit.
 - Tune damage numbers from logged hits.

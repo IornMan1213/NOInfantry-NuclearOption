@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using HarmonyLib;
+using NuclearOption.Jobs;
 using UnityEngine;
 
 namespace NOInfantry
@@ -8,7 +10,7 @@ namespace NOInfantry
     // Player driving + gunning of an existing GroundVehicle (host / single-player only).
     //
     // Driving: the vehicle's Burst job skips its AI input code when fields.mobile == false but still applies
-    // whatever fields.inputs hold, so a postfix on UpdateJobFields writes our throttle/steering there.
+    // whatever fields.inputs hold, so ApplyInputs writes our throttle/steering there each physics step.
     // Gunning: Turret's own "manual" mode assumes an aircraft (NRE on ground vehicles), so we replace
     // Turret.FixedUpdate for our turrets and call its private AimTurret(Vector3) with the camera's aim vector.
     internal static class VehicleControl
@@ -24,8 +26,10 @@ namespace NOInfantry
         private static readonly Action<Turret, Vector3> aimTurret =
             AccessTools.MethodDelegate<Action<Turret, Vector3>>(AccessTools.Method(typeof(Turret), "AimTurret", new[] { typeof(Vector3) }));
 
-        private static readonly AccessTools.FieldRef<GroundVehicle, NuclearOption.Jobs.PtrAllocation<NuclearOption.Jobs.GroundVehicleFields>> jobFieldsRef =
-            AccessTools.FieldRefAccess<GroundVehicle, NuclearOption.Jobs.PtrAllocation<NuclearOption.Jobs.GroundVehicleFields>>("JobFields");
+        // Plain reflection on purpose: Harmony patches / FieldRefAccess over PtrAllocation<T> (a T* struct) make
+        // MonoMod import a pointer-to-generic type, which hard-crashes Mono at startup. The boxed copy holds the
+        // same pointer, so Ref() on it writes the real job memory.
+        private static readonly FieldInfo jobFieldsField = AccessTools.Field(typeof(GroundVehicle), "JobFields");
 
         internal static GroundVehicle FindEnterable(PilotDismounted pilot)
         {
@@ -65,10 +69,10 @@ namespace NOInfantry
             if (gv != null)
             {
                 // Hand the vehicle back to its AI.
-                ref var jobFields = ref jobFieldsRef(gv);
-                if (jobFields.IsCreated)
+                var alloc = (PtrAllocation<GroundVehicleFields>)jobFieldsField.GetValue(gv);
+                if (alloc.IsCreated)
                 {
-                    ref NuclearOption.Jobs.GroundVehicleFields f = ref jobFields.Ref();
+                    ref GroundVehicleFields f = ref alloc.Ref();
                     f.mobile = Traverse.Create(gv).Field("mobile").GetValue<bool>();
                     f.inputs = default;
                 }
@@ -104,17 +108,18 @@ namespace NOInfantry
             return string.Join("  ", parts);
         }
 
-        [HarmonyPatch(typeof(GroundVehicle), nameof(GroundVehicle.UpdateJobFields))]
-        [HarmonyPostfix]
-        private static void UpdateJobFieldsPostfix(GroundVehicle __instance, ref NuclearOption.Jobs.PtrAllocation<NuclearOption.Jobs.GroundVehicleFields> ___JobFields)
+        // Called every physics step while driving. The job reads these fields on its next run; with
+        // mobile == false its Inputs() returns early and leaves our values alone.
+        internal static void ApplyInputs()
         {
-            if (__instance != Driven || !___JobFields.IsCreated) return;
-            ref NuclearOption.Jobs.GroundVehicleFields f = ref ___JobFields.Ref();
-            f.mobile = false; // job keeps our inputs instead of computing AI ones
+            if (Driven == null) return;
+            var alloc = (PtrAllocation<GroundVehicleFields>)jobFieldsField.GetValue(Driven);
+            if (!alloc.IsCreated) return;
+            ref GroundVehicleFields f = ref alloc.Ref();
+            f.mobile = false;
             f.inputs.throttle = Throttle;
             f.inputs.steering = Steering * 0.5f - f.angularVelocity.y * 0.2f;
             f.inputs.brake = Mathf.Clamp01(1f - Mathf.Abs(Throttle));
-            f.stationary = false;
         }
 
         [HarmonyPatch(typeof(Turret), "FixedUpdate")]

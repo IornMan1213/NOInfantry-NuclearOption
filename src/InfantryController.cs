@@ -37,6 +37,11 @@ namespace NOInfantry
         private AudioSource audioSource;
         private ViewModel viewModel;
         private Vector2 lastLook;
+        private float lastHp = 100f;
+        private float hurtUntil;
+
+        private static readonly HarmonyLib.AccessTools.FieldRef<PilotDismounted, float> hitPointsRef =
+            HarmonyLib.AccessTools.FieldRefAccess<PilotDismounted, float>("hitPoints");
 
         private void Awake()
         {
@@ -171,6 +176,7 @@ namespace NOInfantry
             ammo = Plugin.MagazineSize.Value;
             reloadDoneTime = 0f;
             grenades = Plugin.GrenadeCount.Value;
+            lastHp = hitPointsRef(pilot);
             BorrowedAssets.Find();
             SetupAudio();
             Plugin.Log.LogInfo($"Infantry mode ON: {pilot.unitName} at {pilot.transform.position}");
@@ -430,6 +436,7 @@ namespace NOInfantry
             GroundVehicle gv = VehicleControl.Driven;
             if (gv != null)
             {
+                VehicleControl.ApplyInputs();
                 // Ride along inside the vehicle (collider is off while seated).
                 Vector3 seat = gv.transform.position + Vector3.up * (gv.definition.height * 0.5f);
                 pilot.transform.position = seat;
@@ -528,6 +535,25 @@ namespace NOInfantry
             float cx = Screen.width * 0.5f;
             float cy = Screen.height * 0.5f;
             Color prev = GUI.color;
+
+            // Health + hurt flash
+            float hp = hitPointsRef(Controlled);
+            if (Event.current.type == EventType.Repaint)
+            {
+                if (hp < lastHp - 0.01f)
+                {
+                    hurtUntil = Time.time + 0.35f;
+                    Plugin.Log.LogInfo($"Took {lastHp - hp:F1} damage, HP {hp:F1}");
+                }
+                lastHp = hp;
+            }
+            if (Time.time < hurtUntil)
+            {
+                GUI.color = new Color(0.8f, 0f, 0f, 0.35f * (hurtUntil - Time.time) / 0.35f);
+                GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+            }
+            GUI.color = hp < 35f ? new Color(1f, 0.35f, 0.3f) : Color.white;
+            GUI.Label(new Rect(20f, Screen.height - 108f, 200f, 24f), $"HEALTH  {Mathf.Max(hp, 0f):F0}");
 
             if (VehicleControl.Driven != null)
             {

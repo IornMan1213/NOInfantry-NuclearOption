@@ -23,6 +23,9 @@ namespace NOInfantry
         internal static ConfigEntry<float> EnterDistance;
         internal static ConfigEntry<float> VehicleCamDistance;
         internal static ConfigEntry<bool> AllowVehicleMissiles;
+        internal static ConfigEntry<bool> AiTargetsInfantry;
+        internal static ConfigEntry<float> AiEngageRange;
+        internal static ConfigEntry<float> AiInfantryPriority;
         internal static ConfigEntry<float> MouseSensitivity;
         internal static ConfigEntry<float> Fov;
         internal static ConfigEntry<float> AdsFov;
@@ -84,9 +87,24 @@ namespace NOInfantry
             VehicleCamDistance = Config.Bind("Vehicles", "CameraDistance", 6f, "Extra third-person camera distance");
             AllowVehicleMissiles = Config.Bind("Vehicles", "AllowMissiles", false, "Let LMB fire non-gun turret weapons (unguided, experimental)");
 
+            AiTargetsInfantry = Config.Bind("AI", "TargetInfantry", true, "Enemy gun turrets/vehicles engage you while on foot");
+            AiEngageRange = Config.Bind("AI", "EngageRange", 1200f, "Max metres at which AI guns will shoot at you");
+            AiInfantryPriority = Config.Bind("AI", "Priority", 0.3f, "Target value vs other units (higher = AI prefers you over vehicles)");
+
             var harmony = new Harmony(Guid);
-            harmony.PatchAll(typeof(Patches));
-            harmony.PatchAll(typeof(VehicleControl));
+            foreach (System.Type patchClass in new[] { typeof(Patches), typeof(VehicleControl) })
+            {
+                // Logged before patching so a native crash still shows which class was being applied.
+                Log.LogInfo($"Applying patches: {patchClass.Name}");
+                try
+                {
+                    harmony.PatchAll(patchClass);
+                }
+                catch (System.Exception e)
+                {
+                    Log.LogError($"Patching {patchClass.Name} failed; related features disabled.\n{e}");
+                }
+            }
 
             var host = new GameObject("NOInfantry");
             DontDestroyOnLoad(host);
