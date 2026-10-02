@@ -36,6 +36,13 @@ namespace NOInfantry
         internal static ConfigEntry<float> SpreadDegrees;
         internal static ConfigEntry<int> MagazineSize;
         internal static ConfigEntry<float> ReloadTime;
+        internal static ConfigEntry<float> RifleVolume;
+
+        // Grenades
+        internal static ConfigEntry<int> GrenadeCount;
+        internal static ConfigEntry<float> GrenadeYield;
+        internal static ConfigEntry<float> GrenadeFuse;
+        internal static ConfigEntry<float> GrenadeThrowSpeed;
 
         private void Awake()
         {
@@ -59,6 +66,12 @@ namespace NOInfantry
             SpreadDegrees = Config.Bind("Rifle", "SpreadDegrees", 0.4f, "Hip-fire cone; halved when aiming");
             MagazineSize = Config.Bind("Rifle", "MagazineSize", 30, "Rounds per magazine");
             ReloadTime = Config.Bind("Rifle", "ReloadTime", 2.2f, "Seconds (R to reload)");
+            RifleVolume = Config.Bind("Rifle", "Volume", 0.6f, "Gunshot volume (sound borrowed from the game's smallest gun)");
+
+            GrenadeCount = Config.Bind("Grenades", "Count", 3, "Grenades carried (G to throw)");
+            GrenadeYield = Config.Bind("Grenades", "Yield", 0.2f, "kg TNT equivalent, fed to the game's blast model (frag radius = 20 * cbrt(yield) m)");
+            GrenadeFuse = Config.Bind("Grenades", "Fuse", 3.5f, "Seconds");
+            GrenadeThrowSpeed = Config.Bind("Grenades", "ThrowSpeed", 16f, "m/s");
 
             new Harmony(Guid).PatchAll(typeof(Patches));
 

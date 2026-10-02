@@ -28,4 +28,11 @@
     <Reference Include="UnityEngine.AudioModule"><HintPath>$(Managed)\UnityEngine.AudioModule.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 
+  <!-- Every build drops the latest DLL into the game's plugins folder. -->
+  <Target Name="DeployToPlugins" AfterTargets="Build">
+    <MakeDir Directories="$(NuclearOptionPath)\BepInEx\plugins\NOInfantry" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(NuclearOptionPath)\BepInEx\plugins\NOInfantry" />
+    <Message Importance="high" Text="Deployed $(TargetFileName) to $(NuclearOptionPath)\BepInEx\plugins\NOInfantry" />
+  </Target>
+
 </Project>

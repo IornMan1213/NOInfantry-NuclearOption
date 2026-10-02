@@ -33,6 +33,8 @@ namespace NOInfantry
         private int shotsFired;
         private int hits;
         private bool loggedMouseFallback;
+        private int grenades;
+        private AudioSource audioSource;
 
         private void Awake()
         {
@@ -134,7 +136,19 @@ namespace NOInfantry
 
             ammo = Plugin.MagazineSize.Value;
             reloadDoneTime = 0f;
+            grenades = Plugin.GrenadeCount.Value;
+            BorrowedAssets.Find();
+            SetupAudio();
             Plugin.Log.LogInfo($"Infantry mode ON: {pilot.unitName} at {pilot.transform.position}");
+        }
+
+        private void SetupAudio()
+        {
+            if (audioSource != null) return;
+            audioSource = gameObject.AddComponent<AudioSource>();
+            audioSource.playOnAwake = false;
+            audioSource.spatialBlend = 0f;
+            if (SoundManager.i != null) audioSource.outputAudioMixerGroup = SoundManager.i.EffectsMixer;
         }
 
         private void Exit(string reason)
@@ -201,6 +215,7 @@ namespace NOInfantry
                 ammo = Plugin.MagazineSize.Value;
                 reloadDoneTime = 0f;
             }
+            if (Input.GetKeyDown(KeyCode.G) && grenades > 0) ThrowGrenade();
             if (Input.GetMouseButton(0) && Time.time >= nextShotTime && reloadDoneTime == 0f)
             {
                 if (ammo > 0) Fire();
@@ -245,14 +260,32 @@ namespace NOInfantry
             Vector3 origin = eye.transform.position;
 
             camState.Pitch -= Random.Range(0.3f, 0.6f) * (Aiming ? 0.5f : 1f); // recoil
+            AudioClip[] shots = BorrowedAssets.RifleShots;
+            if (audioSource != null && shots != null && shots.Length > 0)
+            {
+                audioSource.pitch = Random.Range(1.15f, 1.3f); // small gun sounds a bit higher
+                audioSource.PlayOneShot(shots[Random.Range(0, shots.Length)], Plugin.RifleVolume.Value);
+            }
 
             Vector3 end = origin + dir * Plugin.Range.Value;
             if (Raycast(origin, dir, pilot, out RaycastHit hit))
             {
                 end = hit.point;
-                ApplyHit(pilot, hit, dir);
+                bool water = hit.point.y < Datum.LocalSeaY || hit.collider.sharedMaterial == GameAssets.i.WaterMaterial;
+                bool armor = hit.collider.sharedMaterial != GameAssets.i.terrainMaterial;
+                BorrowedAssets.PlayImpact(hit.point, hit.normal, dir, armor, water);
+                if (!water) ApplyHit(pilot, hit, dir);
             }
             Tracer.Spawn(origin + dir * 1.5f - Vector3.up * 0.1f, end);
+        }
+
+        private void ThrowGrenade()
+        {
+            PilotDismounted pilot = Controlled;
+            Transform eye = SceneSingleton<CameraStateManager>.i.mainCamera.transform;
+            grenades--;
+            Vector3 dir = (eye.forward + Vector3.up * 0.15f).normalized;
+            Grenade.Throw(pilot, eye.position + eye.forward * 0.5f, pilot.rb.velocity + dir * Plugin.GrenadeThrowSpeed.Value);
         }
 
         private static bool Raycast(Vector3 origin, Vector3 dir, PilotDismounted self, out RaycastHit best)
@@ -361,8 +394,8 @@ namespace NOInfantry
 
             GUI.color = Color.white;
             string ammoText = reloadDoneTime > 0f ? "RELOADING" : $"{ammo} / {Plugin.MagazineSize.Value}";
-            GUI.Label(new Rect(Screen.width - 220f, Screen.height - 60f, 200f, 24f), $"RIFLE  {ammoText}");
-            GUI.Label(new Rect(20f, Screen.height - 60f, 400f, 24f), $"INFANTRY  [{Plugin.ToggleKey.Value}] exit   R reload   RMB aim");
+            GUI.Label(new Rect(Screen.width - 320f, Screen.height - 60f, 300f, 24f), $"RIFLE  {ammoText}    GRENADES  {grenades}");
+            GUI.Label(new Rect(20f, Screen.height - 60f, 400f, 24f), $"INFANTRY  [{Plugin.ToggleKey.Value}] exit   R reload   RMB aim   G grenade");
             GUI.color = prev;
         }
     }

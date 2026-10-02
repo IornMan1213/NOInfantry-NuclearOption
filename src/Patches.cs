@@ -1,4 +1,5 @@
 using HarmonyLib;
+using UnityEngine;
 
 namespace NOInfantry
 {
@@ -21,6 +22,19 @@ namespace NOInfantry
         private static bool CapturePrefix(PilotDismounted __instance)
         {
             return InfantryController.Controlled != __instance;
+        }
+
+        // PilotDismounted.CheckForCapture "returns" a landed pilot to base (destroying it) when near a
+        // friendly airbase. Only lie for the controlled pilot's exact position; every other caller is untouched.
+        [HarmonyPatch(typeof(FactionHQ), nameof(FactionHQ.AnyNearAirbase))]
+        [HarmonyPrefix]
+        private static bool AnyNearAirbasePrefix(Vector3 fromPosition, ref Airbase airbase, ref bool __result)
+        {
+            PilotDismounted p = InfantryController.Controlled;
+            if (p == null || (fromPosition - p.transform.position).sqrMagnitude > 1f) return true;
+            airbase = null;
+            __result = false;
+            return false;
         }
     }
 }
