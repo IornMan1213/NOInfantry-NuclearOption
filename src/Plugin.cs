@@ -11,7 +11,7 @@ namespace NOInfantry
     {
         public const string Guid = "jayea.noinfantry";
         public const string Name = "NO Infantry";
-        public const string Version = "0.1.0";
+        public const string Version = "0.3.0";
 
         internal static ManualLogSource Log;
         internal static string PluginDir;
@@ -32,6 +32,17 @@ namespace NOInfantry
         internal static ConfigEntry<bool> AiTargetsInfantry;
         internal static ConfigEntry<float> AiEngageRange;
         internal static ConfigEntry<float> AiInfantryPriority;
+        internal static ConfigEntry<KeyCode> BoardKey;
+
+        // Launcher
+        internal static ConfigEntry<int> LauncherAmmo;
+        internal static ConfigEntry<float> LauncherReload;
+        internal static ConfigEntry<float> LauncherRange;
+        internal static ConfigEntry<float> LauncherEjectSpeed;
+        internal static ConfigEntry<float> LockTime;
+        internal static ConfigEntry<float> LockConeDegrees;
+        internal static ConfigEntry<string> AaMissileName;
+        internal static ConfigEntry<string> AtMissileName;
         internal static ConfigEntry<float> MouseSensitivity;
         internal static ConfigEntry<float> Fov;
         internal static ConfigEntry<float> AdsFov;
@@ -101,6 +112,17 @@ namespace NOInfantry
             AiTargetsInfantry = Config.Bind("AI", "TargetInfantry", true, "Enemy gun turrets/vehicles engage you while on foot");
             AiEngageRange = Config.Bind("AI", "EngageRange", 1200f, "Max metres at which AI guns will shoot at you");
             AiInfantryPriority = Config.Bind("AI", "Priority", 0.3f, "Target value vs other units (higher = AI prefers you over vehicles)");
+
+            BoardKey = Config.Bind("Controls", "RequestAircraftKey", KeyCode.B, "At a friendly airbase: open the aircraft selection menu");
+
+            LauncherAmmo = Config.Bind("Launcher", "Rockets", 4, "Missiles carried (2 to select the launcher)");
+            LauncherReload = Config.Bind("Launcher", "Reload", 4f, "Seconds between launches");
+            LauncherRange = Config.Bind("Launcher", "LockRange", 6000f, "Max lock range in metres");
+            LauncherEjectSpeed = Config.Bind("Launcher", "EjectSpeed", 30f, "Initial missile speed out of the tube (m/s)");
+            LockTime = Config.Bind("Launcher", "LockTime", 1.5f, "Seconds holding RMB on a target to lock");
+            LockConeDegrees = Config.Bind("Launcher", "LockCone", 4f, "Degrees from the crosshair a target can be locked");
+            AaMissileName = Config.Bind("Launcher", "AntiAirMissile", "", "Force a missile by short name (see log for candidates); empty = lightest IR anti-air missile");
+            AtMissileName = Config.Bind("Launcher", "AntiSurfaceMissile", "", "Force a missile by short name; empty = lightest self-guided anti-surface missile");
 
             var harmony = new Harmony(Guid);
             foreach (System.Type patchClass in new[] { typeof(Patches), typeof(VehicleControl) })

@@ -30,11 +30,11 @@ namespace NOInfantry
             float targetFov = InfantryController.Instance.Aiming ? Plugin.AdsFov.Value : Plugin.Fov.Value;
             cam.mainCamera.fieldOfView = Mathf.Lerp(cam.mainCamera.fieldOfView, targetFov, 12f * Time.unscaledDeltaTime);
 
-            GroundVehicle gv = VehicleControl.Driven;
+            Unit driven = VehicleControl.Driven;
             Quaternion look = Quaternion.Euler(Pitch, Yaw, 0f);
-            if (gv != null)
+            if (driven != null)
             {
-                UpdateVehicleCamera(cam, gv, look);
+                UpdateVehicleCamera(cam, driven, look);
                 return;
             }
 
@@ -45,10 +45,10 @@ namespace NOInfantry
         }
 
         // Third-person orbit around the vehicle; the aim point is whatever is under the screen centre.
-        private static void UpdateVehicleCamera(CameraStateManager cam, GroundVehicle gv, Quaternion look)
+        private static void UpdateVehicleCamera(CameraStateManager cam, Unit gv, Quaternion look)
         {
             Vector3 pivot = gv.transform.position + Vector3.up * (gv.definition.height * 0.8f + 1.5f);
-            float dist = gv.maxRadius * 2f + Plugin.VehicleCamDistance.Value;
+            float dist = Mathf.Min(gv.maxRadius * 2f, 250f) + Plugin.VehicleCamDistance.Value;
             Vector3 back = look * Vector3.back;
             if (Physics.Raycast(pivot, back, out RaycastHit block, dist, PhysicsLayers.StaticsMask))
             {
@@ -61,11 +61,16 @@ namespace NOInfantry
 
             Vector3 fwd = look * Vector3.forward;
             VehicleControl.AimValid = true;
-            VehicleControl.AimPoint = pos + fwd * 3000f;
-            foreach (RaycastHit h in Physics.RaycastAll(pos, fwd, 3000f, ~(int)PhysicsLayers.ExclusionZonesMask, QueryTriggerInteraction.Ignore))
+            VehicleControl.AimPoint = pos + fwd * 5000f;
+            VehicleControl.AimUnit = null;
+            float best = float.MaxValue;
+            foreach (RaycastHit h in Physics.RaycastAll(pos, fwd, 5000f, ~(int)PhysicsLayers.ExclusionZonesMask, QueryTriggerInteraction.Ignore))
             {
-                if (h.collider.transform.IsChildOf(gv.transform)) continue;
-                if ((h.point - pos).sqrMagnitude < (VehicleControl.AimPoint - pos).sqrMagnitude) VehicleControl.AimPoint = h.point;
+                if (h.collider.transform.IsChildOf(gv.transform) || h.distance >= best) continue;
+                best = h.distance;
+                VehicleControl.AimPoint = h.point;
+                Unit hitUnit = h.collider.GetComponentInParent<IDamageable>()?.GetUnit();
+                VehicleControl.AimUnit = hitUnit != null && hitUnit.NetworkHQ != gv.NetworkHQ && !hitUnit.disabled ? hitUnit : null;
             }
         }
 

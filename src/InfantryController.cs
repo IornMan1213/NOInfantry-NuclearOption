@@ -37,6 +37,11 @@ namespace NOInfantry
         private AudioSource audioSource;
         private ViewModel viewModel;
         private Vector2 lastLook;
+
+        private enum Weapon { Rifle, Launcher }
+        private Weapon weapon = Weapon.Rifle;
+        private Launcher launcher;
+        private Airbase nearbyAirbase;
         private float lastHp = 100f;
         private float hurtUntil;
 
@@ -53,6 +58,15 @@ namespace NOInfantry
             TrackLocalPilot();
             PilotDismounted pilot = cachedPilot;
             if (Controlled == null && Plugin.DismountKey.Value.IsDown()) TryDismount();
+
+            // Back in the air through the game's own spawn menu: hand the camera over and return the soldier.
+            if (Controlled != null && AirbaseServices.HasNewAircraft())
+            {
+                PilotDismounted returning = Controlled;
+                Exit("spawned a new aircraft", restoreCamera: false);
+                AirbaseServices.ReturnPilot(returning);
+                return;
+            }
 
             // (object) cast: a destroyed pilot compares == null under Unity rules but the reference is still set.
             if ((object)Controlled != null && (Controlled == null || Controlled.disabled))
@@ -89,7 +103,7 @@ namespace NOInfantry
             {
                 KeepCamera();
                 ReadInput();
-                if (viewModel != null && VehicleControl.Driven == null)
+                if (viewModel != null && VehicleControl.Driven == null && weapon == Weapon.Rifle)
                 {
                     float speed = new Vector2(Controlled.rb.velocity.x, Controlled.rb.velocity.z).magnitude;
                     viewModel.Tick(Aiming, sprint, reloadDoneTime > 0f, grounded ? speed : 0f, lastLook);
@@ -131,7 +145,7 @@ namespace NOInfantry
 
         private static bool CanControl(PilotDismounted pilot)
         {
-            if (pilot == null || pilot.disabled) return false;
+            if (pilot == null || pilot.disabled || AirbaseServices.HasNewAircraft()) return false;
             if (!pilot.LocalSim)
             {
                 Plugin.Log.LogWarning("Pilot is simulated by the server; infantry mode is host/single-player only for now.");
@@ -173,6 +187,12 @@ namespace NOInfantry
             if (viewModel != null) Destroy(viewModel.gameObject);
             viewModel = ViewModel.Create(cam.mainCamera, fallback);
 
+            if (launcher == null) launcher = new Launcher(gameObject);
+            launcher.Ammo = Plugin.LauncherAmmo.Value;
+            launcher.CreateTube(cam.mainCamera.transform, Shader.Find("Universal Render Pipeline/Lit") ?? fallback);
+            Launcher.FindMissiles();
+            SelectWeapon(Weapon.Rifle);
+
             ammo = Plugin.MagazineSize.Value;
             reloadDoneTime = 0f;
             grenades = Plugin.GrenadeCount.Value;
@@ -191,7 +211,7 @@ namespace NOInfantry
             if (SoundManager.i != null) audioSource.outputAudioMixerGroup = SoundManager.i.EffectsMixer;
         }
 
-        private void Exit(string reason)
+        private void Exit(string reason, bool restoreCamera = true)
         {
             if ((object)VehicleControl.Driven != null) LeaveVehicle();
             PilotDismounted pilot = Controlled;
@@ -206,9 +226,11 @@ namespace NOInfantry
             hiddenRenderers.Clear();
             if (viewModel != null) Destroy(viewModel.gameObject);
             viewModel = null;
+            launcher?.Destroy();
+            weapon = Weapon.Rifle;
 
             CameraStateManager cam = SceneSingleton<CameraStateManager>.i;
-            if (cam != null && cam.currentState == camState)
+            if (restoreCamera && cam != null && cam.currentState == camState)
             {
                 cam.SetFollowingUnit(pilot != null ? pilot : null);
             }
@@ -247,7 +269,7 @@ namespace NOInfantry
             if (Input.GetKeyDown(Plugin.UseKey.Value))
             {
                 if (VehicleControl.Driven != null) { LeaveVehicle(); return; }
-                GroundVehicle gv = VehicleControl.FindEnterable(Controlled);
+                Unit gv = VehicleControl.FindEnterable(Controlled);
                 if (gv != null) { EnterVehicle(gv); return; }
             }
             if (VehicleControl.Driven != null)
@@ -265,6 +287,23 @@ namespace NOInfantry
             sprint = Input.GetKey(KeyCode.LeftShift) && moveInput.y > 0f;
             if (Input.GetKeyDown(KeyCode.Space)) jumpQueued = true;
 
+            // Weapons
+            if (Input.GetKeyDown(KeyCode.Alpha1)) SelectWeapon(Weapon.Rifle);
+            if (Input.GetKeyDown(KeyCode.Alpha2)) SelectWeapon(Weapon.Launcher);
+            float scroll = Input.mouseScrollDelta.y;
+            if (scroll != 0f) SelectWeapon(weapon == Weapon.Rifle ? Weapon.Launcher : Weapon.Rifle);
+            if (Input.GetKeyDown(KeyCode.G) && grenades > 0) ThrowGrenade();
+
+            // Ground -> air
+            if (Input.GetKeyDown(Plugin.BoardKey.Value) && nearbyAirbase != null) AirbaseServices.OpenAircraftMenu(nearbyAirbase);
+
+            if (weapon == Weapon.Launcher)
+            {
+                Camera eye = SceneSingleton<CameraStateManager>.i.mainCamera;
+                launcher.Tick(Controlled, eye, seeking: Aiming, fire: Input.GetMouseButtonDown(0));
+                return;
+            }
+
             // Rifle
             if (Input.GetKeyDown(KeyCode.R)) StartReload();
             if (reloadDoneTime > 0f && Time.time >= reloadDoneTime)
@@ -272,12 +311,18 @@ namespace NOInfantry
                 ammo = Plugin.MagazineSize.Value;
                 reloadDoneTime = 0f;
             }
-            if (Input.GetKeyDown(KeyCode.G) && grenades > 0) ThrowGrenade();
             if (Input.GetMouseButton(0) && Time.time >= nextShotTime && reloadDoneTime == 0f)
             {
                 if (ammo > 0) Fire();
                 else StartReload();
             }
+        }
+
+        private void SelectWeapon(Weapon w)
+        {
+            weapon = w;
+            if (viewModel != null) viewModel.gameObject.SetActive(w == Weapon.Rifle && VehicleControl.Driven == null);
+            launcher?.SetVisible(w == Weapon.Launcher && VehicleControl.Driven == null);
         }
 
         private void ReadVehicleInput()
@@ -293,18 +338,19 @@ namespace NOInfantry
             if (Input.GetMouseButton(0)) VehicleControl.FireHeld();
         }
 
-        private void EnterVehicle(GroundVehicle gv)
+        private void EnterVehicle(Unit gv)
         {
             PilotDismounted pilot = Controlled;
-            VehicleControl.Enter(gv);
+            VehicleControl.Enter(gv, pilot);
             pilot.SetCollidable(false);
             foreach (Renderer r in hiddenRenderers) if (r != null) r.enabled = false;
             if (viewModel != null) viewModel.gameObject.SetActive(false);
+            launcher?.SetVisible(false);
         }
 
         private void LeaveVehicle()
         {
-            GroundVehicle gv = VehicleControl.Driven;
+            Unit gv = VehicleControl.Driven;
             VehicleControl.Exit();
             VehicleControl.Throttle = 0f;
             VehicleControl.Steering = 0f;
@@ -312,7 +358,13 @@ namespace NOInfantry
             if (pilot == null) return;
 
             Vector3 spot = pilot.transform.position;
-            if (gv != null)
+            if (gv is Ship)
+            {
+                // Back where we boarded, on deck.
+                spot = gv.transform.TransformPoint(VehicleControl.BoardLocalPos);
+                pilot.rb.velocity = gv.rb.velocity;
+            }
+            else if (gv != null)
             {
                 spot = gv.transform.position + gv.transform.right * (gv.maxRadius + 1.5f) + Vector3.up * 3f;
                 if (Physics.Raycast(spot, Vector3.down, out RaycastHit hit, 20f, ~(int)PhysicsLayers.ExclusionZonesMask))
@@ -325,7 +377,7 @@ namespace NOInfantry
             pilot.rb.position = spot;
             pilot.SetCollidable(true);
             foreach (Renderer r in hiddenRenderers) if (r != null) r.enabled = true;
-            if (viewModel != null) viewModel.gameObject.SetActive(true);
+            SelectWeapon(weapon);
         }
 
         private Vector2 ReadMouse()
@@ -433,12 +485,14 @@ namespace NOInfantry
         internal void PhysicsStep(PilotDismounted pilot)
         {
             Rigidbody rb = pilot.rb;
-            GroundVehicle gv = VehicleControl.Driven;
+            Unit gv = VehicleControl.Driven;
             if (gv != null)
             {
                 VehicleControl.ApplyInputs();
-                // Ride along inside the vehicle (collider is off while seated).
-                Vector3 seat = gv.transform.position + Vector3.up * (gv.definition.height * 0.5f);
+                // Ride along (collider is off while seated): ships keep us where we boarded on deck.
+                Vector3 seat = gv is Ship
+                    ? gv.transform.TransformPoint(VehicleControl.BoardLocalPos)
+                    : gv.transform.position + Vector3.up * (gv.definition.height * 0.5f);
                 pilot.transform.position = seat;
                 rb.position = seat;
                 rb.velocity = gv.rb.velocity;
@@ -495,7 +549,7 @@ namespace NOInfantry
             jumpQueued = false;
         }
 
-        private GroundVehicle nearbyVehicle;
+        private Unit nearbyVehicle;
 
         private void DrawVehicleHud(float cx, float cy)
         {
@@ -522,7 +576,7 @@ namespace NOInfantry
                 break;
             }
 
-            GroundVehicle gv = VehicleControl.Driven;
+            Unit gv = VehicleControl.Driven;
             GUI.color = Color.white;
             GUI.Label(new Rect(20f, Screen.height - 84f, 700f, 24f), $"{gv.unitName}   {Mathf.Abs(gv.speed) * 3.6f:F0} km/h   {VehicleControl.WeaponSummary()}");
             GUI.Label(new Rect(20f, Screen.height - 60f, 500f, 24f), $"WASD drive   LMB fire   RMB zoom   [{Plugin.UseKey.Value}] get out");
@@ -564,23 +618,50 @@ namespace NOInfantry
             if (Event.current.type == EventType.Repaint && Time.frameCount % 15 == 0)
             {
                 nearbyVehicle = VehicleControl.FindEnterable(Controlled);
+                nearbyAirbase = AirbaseServices.NearFriendlyAirbase(Controlled);
             }
+            float promptY = cy + 60f;
             if (nearbyVehicle != null)
             {
-                GUI.Label(new Rect(cx - 150f, cy + 60f, 300f, 24f), $"[{Plugin.UseKey.Value}] enter {nearbyVehicle.unitName}");
+                string verb = nearbyVehicle is Ship ? "take the helm of" : "enter";
+                GUI.Label(new Rect(cx - 150f, promptY, 400f, 24f), $"[{Plugin.UseKey.Value}] {verb} {nearbyVehicle.unitName}");
+                promptY += 22f;
+            }
+            if (nearbyAirbase != null)
+            {
+                GUI.Label(new Rect(cx - 150f, promptY, 400f, 24f), $"[{Plugin.BoardKey.Value}] request an aircraft");
             }
 
-            GUI.color = Time.time < hitMarkerUntil ? Color.red : new Color(1f, 1f, 1f, Aiming ? 0f : 0.85f);
-            float gap = 6f;
-            GUI.DrawTexture(new Rect(cx - gap - 8f, cy - 1f, 8f, 2f), Texture2D.whiteTexture);
-            GUI.DrawTexture(new Rect(cx + gap, cy - 1f, 8f, 2f), Texture2D.whiteTexture);
-            GUI.DrawTexture(new Rect(cx - 1f, cy - gap - 8f, 2f, 8f), Texture2D.whiteTexture);
-            GUI.DrawTexture(new Rect(cx - 1f, cy + gap, 2f, 8f), Texture2D.whiteTexture);
+            Camera eye = SceneSingleton<CameraStateManager>.i.mainCamera;
+            if (weapon == Weapon.Launcher)
+            {
+                // Launcher reticle: a circle-ish box showing the lock cone.
+                GUI.color = new Color(1f, 1f, 1f, 0.6f);
+                float r = Mathf.Tan(Plugin.LockConeDegrees.Value * Mathf.Deg2Rad) / Mathf.Tan(eye.fieldOfView * 0.5f * Mathf.Deg2Rad) * Screen.height * 0.5f;
+                GUI.DrawTexture(new Rect(cx - r, cy - 1f, 10f, 2f), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(cx + r - 10f, cy - 1f, 10f, 2f), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(cx - 1f, cy - r, 2f, 10f), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(cx - 1f, cy + r - 10f, 2f, 10f), Texture2D.whiteTexture);
+                launcher.DrawHud(eye);
+            }
+            else
+            {
+                GUI.color = Time.time < hitMarkerUntil ? Color.red : new Color(1f, 1f, 1f, Aiming ? 0f : 0.85f);
+                float gap = 6f;
+                GUI.DrawTexture(new Rect(cx - gap - 8f, cy - 1f, 8f, 2f), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(cx + gap, cy - 1f, 8f, 2f), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(cx - 1f, cy - gap - 8f, 2f, 8f), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(cx - 1f, cy + gap, 2f, 8f), Texture2D.whiteTexture);
+            }
 
             GUI.color = Color.white;
-            string ammoText = reloadDoneTime > 0f ? "RELOADING" : $"{ammo} / {Plugin.MagazineSize.Value}";
-            GUI.Label(new Rect(Screen.width - 320f, Screen.height - 60f, 300f, 24f), $"RIFLE  {ammoText}    GRENADES  {grenades}");
-            GUI.Label(new Rect(20f, Screen.height - 60f, 400f, 24f), $"INFANTRY  [{Plugin.ToggleKey.Value}] exit   R reload   RMB aim   G grenade");
+            string weaponText = weapon == Weapon.Launcher
+                ? launcher.Summary
+                : $"RIFLE  {(reloadDoneTime > 0f ? "RELOADING" : $"{ammo} / {Plugin.MagazineSize.Value}")}";
+            GUI.Label(new Rect(Screen.width - 520f, Screen.height - 84f, 500f, 24f), weaponText);
+            GUI.Label(new Rect(Screen.width - 520f, Screen.height - 60f, 500f, 24f), $"GRENADES  {grenades}    [1] rifle  [2] launcher");
+            string help = weapon == Weapon.Launcher ? "RMB lock   LMB fire" : "RMB aim   R reload";
+            GUI.Label(new Rect(20f, Screen.height - 60f, 600f, 24f), $"INFANTRY  {help}   G grenade   [{Plugin.ToggleKey.Value}] exit");
             GUI.color = prev;
         }
     }

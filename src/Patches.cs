@@ -50,7 +50,7 @@ namespace NOInfantry
         private static bool AnyNearAirbasePrefix(Vector3 fromPosition, ref Airbase airbase, ref bool __result)
         {
             PilotDismounted p = InfantryController.Controlled;
-            if (p == null || (fromPosition - p.transform.position).sqrMagnitude > 1f) return true;
+            if (AirbaseServices.BypassAirbasePatch || p == null || (fromPosition - p.transform.position).sqrMagnitude > 1f) return true;
             airbase = null;
             __result = false;
             return false;
