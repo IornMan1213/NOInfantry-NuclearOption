@@ -56,6 +56,11 @@ namespace NOInfantry
                 return;
             }
 
+            if ((object)VehicleControl.Driven != null && (VehicleControl.Driven == null || VehicleControl.Driven.disabled))
+            {
+                LeaveVehicle();
+            }
+
             if (pilot != null && Plugin.ToggleKey.Value.IsDown())
             {
                 if (Controlled == pilot)
@@ -79,7 +84,7 @@ namespace NOInfantry
             {
                 KeepCamera();
                 ReadInput();
-                if (viewModel != null)
+                if (viewModel != null && VehicleControl.Driven == null)
                 {
                     float speed = new Vector2(Controlled.rb.velocity.x, Controlled.rb.velocity.z).magnitude;
                     viewModel.Tick(Aiming, sprint, reloadDoneTime > 0f, grounded ? speed : 0f, lastLook);
@@ -182,6 +187,7 @@ namespace NOInfantry
 
         private void Exit(string reason)
         {
+            if ((object)VehicleControl.Driven != null) LeaveVehicle();
             PilotDismounted pilot = Controlled;
             Controlled = null;
             camState.Pilot = null;
@@ -232,6 +238,18 @@ namespace NOInfantry
             camState.Yaw += look.x;
             camState.Pitch = Mathf.Clamp(camState.Pitch - look.y, -85f, 85f);
 
+            if (Input.GetKeyDown(Plugin.UseKey.Value))
+            {
+                if (VehicleControl.Driven != null) { LeaveVehicle(); return; }
+                GroundVehicle gv = VehicleControl.FindEnterable(Controlled);
+                if (gv != null) { EnterVehicle(gv); return; }
+            }
+            if (VehicleControl.Driven != null)
+            {
+                ReadVehicleInput();
+                return;
+            }
+
             // Movement
             if (Input.GetKey(KeyCode.W)) moveInput.y += 1f;
             if (Input.GetKey(KeyCode.S)) moveInput.y -= 1f;
@@ -254,6 +272,54 @@ namespace NOInfantry
                 if (ammo > 0) Fire();
                 else StartReload();
             }
+        }
+
+        private void ReadVehicleInput()
+        {
+            float throttle = 0f, steer = 0f;
+            if (Input.GetKey(KeyCode.W)) throttle += 1f;
+            if (Input.GetKey(KeyCode.S)) throttle -= 1f;
+            if (Input.GetKey(KeyCode.D)) steer += 1f;
+            if (Input.GetKey(KeyCode.A)) steer -= 1f;
+            if (VehicleControl.Driven.speed < -0.5f) steer = -steer; // steer like a car when reversing
+            VehicleControl.Throttle = throttle;
+            VehicleControl.Steering = steer;
+            if (Input.GetMouseButton(0)) VehicleControl.FireHeld();
+        }
+
+        private void EnterVehicle(GroundVehicle gv)
+        {
+            PilotDismounted pilot = Controlled;
+            VehicleControl.Enter(gv);
+            pilot.SetCollidable(false);
+            foreach (Renderer r in hiddenRenderers) if (r != null) r.enabled = false;
+            if (viewModel != null) viewModel.gameObject.SetActive(false);
+        }
+
+        private void LeaveVehicle()
+        {
+            GroundVehicle gv = VehicleControl.Driven;
+            VehicleControl.Exit();
+            VehicleControl.Throttle = 0f;
+            VehicleControl.Steering = 0f;
+            PilotDismounted pilot = Controlled;
+            if (pilot == null) return;
+
+            Vector3 spot = pilot.transform.position;
+            if (gv != null)
+            {
+                spot = gv.transform.position + gv.transform.right * (gv.maxRadius + 1.5f) + Vector3.up * 3f;
+                if (Physics.Raycast(spot, Vector3.down, out RaycastHit hit, 20f, ~(int)PhysicsLayers.ExclusionZonesMask))
+                {
+                    spot = hit.point + Vector3.up * HoverHeight;
+                }
+                pilot.rb.velocity = gv.rb.velocity;
+            }
+            pilot.transform.position = spot;
+            pilot.rb.position = spot;
+            pilot.SetCollidable(true);
+            foreach (Renderer r in hiddenRenderers) if (r != null) r.enabled = true;
+            if (viewModel != null) viewModel.gameObject.SetActive(true);
         }
 
         private Vector2 ReadMouse()
@@ -361,7 +427,17 @@ namespace NOInfantry
         internal void PhysicsStep(PilotDismounted pilot)
         {
             Rigidbody rb = pilot.rb;
-            float dt = Time.fixedDeltaTime;
+            GroundVehicle gv = VehicleControl.Driven;
+            if (gv != null)
+            {
+                // Ride along inside the vehicle (collider is off while seated).
+                Vector3 seat = gv.transform.position + Vector3.up * (gv.definition.height * 0.5f);
+                pilot.transform.position = seat;
+                rb.position = seat;
+                rb.velocity = gv.rb.velocity;
+                rb.angularVelocity = Vector3.zero;
+                return;
+            }
             Vector3 pos = pilot.transform.position;
             bool inWater = pos.GlobalY() < 0f;
 
@@ -412,6 +488,39 @@ namespace NOInfantry
             jumpQueued = false;
         }
 
+        private GroundVehicle nearbyVehicle;
+
+        private void DrawVehicleHud(float cx, float cy)
+        {
+            GUI.color = new Color(1f, 1f, 1f, 0.85f);
+            GUI.DrawTexture(new Rect(cx - 2f, cy - 2f, 4f, 4f), Texture2D.whiteTexture);
+
+            // Where the first gun actually points (turrets traverse slower than the camera).
+            Camera camera = SceneSingleton<CameraStateManager>.i.mainCamera;
+            foreach (Turret t in VehicleControl.Turrets)
+            {
+                WeaponStation ws = t.GetWeaponStation();
+                if (ws == null || ws.Weapons.Count == 0 || ws.Weapons[0] == null) continue;
+                Transform muzzle = ws.Weapons[0].transform;
+                float range = Vector3.Distance(muzzle.position, VehicleControl.AimPoint);
+                Vector3 sp = camera.WorldToScreenPoint(muzzle.position + muzzle.forward * range);
+                if (sp.z > 0f)
+                {
+                    float y = Screen.height - sp.y;
+                    GUI.color = new Color(0.4f, 1f, 0.4f, 0.9f);
+                    GUI.DrawTexture(new Rect(sp.x - 9f, y - 1f, 6f, 2f), Texture2D.whiteTexture);
+                    GUI.DrawTexture(new Rect(sp.x + 3f, y - 1f, 6f, 2f), Texture2D.whiteTexture);
+                    GUI.DrawTexture(new Rect(sp.x - 1f, y + 3f, 2f, 6f), Texture2D.whiteTexture);
+                }
+                break;
+            }
+
+            GroundVehicle gv = VehicleControl.Driven;
+            GUI.color = Color.white;
+            GUI.Label(new Rect(20f, Screen.height - 84f, 700f, 24f), $"{gv.unitName}   {Mathf.Abs(gv.speed) * 3.6f:F0} km/h   {VehicleControl.WeaponSummary()}");
+            GUI.Label(new Rect(20f, Screen.height - 60f, 500f, 24f), $"WASD drive   LMB fire   RMB zoom   [{Plugin.UseKey.Value}] get out");
+        }
+
         private void OnGUI()
         {
             if (Controlled == null) return;
@@ -419,6 +528,21 @@ namespace NOInfantry
             float cx = Screen.width * 0.5f;
             float cy = Screen.height * 0.5f;
             Color prev = GUI.color;
+
+            if (VehicleControl.Driven != null)
+            {
+                DrawVehicleHud(cx, cy);
+                GUI.color = prev;
+                return;
+            }
+            if (Event.current.type == EventType.Repaint && Time.frameCount % 15 == 0)
+            {
+                nearbyVehicle = VehicleControl.FindEnterable(Controlled);
+            }
+            if (nearbyVehicle != null)
+            {
+                GUI.Label(new Rect(cx - 150f, cy + 60f, 300f, 24f), $"[{Plugin.UseKey.Value}] enter {nearbyVehicle.unitName}");
+            }
 
             GUI.color = Time.time < hitMarkerUntil ? Color.red : new Color(1f, 1f, 1f, Aiming ? 0f : 0.85f);
             float gap = 6f;

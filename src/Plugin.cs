@@ -19,6 +19,10 @@ namespace NOInfantry
         internal static ConfigEntry<KeyboardShortcut> ToggleKey;
         internal static ConfigEntry<bool> AutoEnter;
         internal static ConfigEntry<KeyboardShortcut> DismountKey;
+        internal static ConfigEntry<KeyCode> UseKey;
+        internal static ConfigEntry<float> EnterDistance;
+        internal static ConfigEntry<float> VehicleCamDistance;
+        internal static ConfigEntry<bool> AllowVehicleMissiles;
         internal static ConfigEntry<float> MouseSensitivity;
         internal static ConfigEntry<float> Fov;
         internal static ConfigEntry<float> AdsFov;
@@ -75,7 +79,14 @@ namespace NOInfantry
             GrenadeFuse = Config.Bind("Grenades", "Fuse", 3.5f, "Seconds");
             GrenadeThrowSpeed = Config.Bind("Grenades", "ThrowSpeed", 16f, "m/s");
 
-            new Harmony(Guid).PatchAll(typeof(Patches));
+            UseKey = Config.Bind("Vehicles", "UseKey", KeyCode.E, "Enter / leave a friendly ground vehicle");
+            EnterDistance = Config.Bind("Vehicles", "EnterDistance", 4f, "Metres from the vehicle's hull you can climb in");
+            VehicleCamDistance = Config.Bind("Vehicles", "CameraDistance", 6f, "Extra third-person camera distance");
+            AllowVehicleMissiles = Config.Bind("Vehicles", "AllowMissiles", false, "Let LMB fire non-gun turret weapons (unguided, experimental)");
+
+            var harmony = new Harmony(Guid);
+            harmony.PatchAll(typeof(Patches));
+            harmony.PatchAll(typeof(VehicleControl));
 
             var host = new GameObject("NOInfantry");
             DontDestroyOnLoad(host);
