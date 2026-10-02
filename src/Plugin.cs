@@ -29,6 +29,7 @@ namespace NOInfantry
         internal static ConfigEntry<float> EnterDistance;
         internal static ConfigEntry<float> VehicleCamDistance;
         internal static ConfigEntry<bool> AllowVehicleMissiles;
+        internal static ConfigEntry<float> TurretFireTolerance;
         internal static ConfigEntry<bool> AiTargetsInfantry;
         internal static ConfigEntry<float> AiEngageRange;
         internal static ConfigEntry<float> AiInfantryPriority;
@@ -107,6 +108,7 @@ namespace NOInfantry
             UseKey = Config.Bind("Vehicles", "UseKey", KeyCode.E, "Enter / leave a friendly ground vehicle");
             EnterDistance = Config.Bind("Vehicles", "EnterDistance", 5f, "Metres from the vehicle's hull you can climb in");
             VehicleCamDistance = Config.Bind("Vehicles", "CameraDistance", 6f, "Extra third-person camera distance");
+            TurretFireTolerance = Config.Bind("Vehicles", "FireTolerance", 5f, "Turret guns only fire when the barrel is within this many degrees of your aim point (stops guns firing into their own vehicle when the target is out of the turret's reach)");
             AllowVehicleMissiles = Config.Bind("Vehicles", "AllowMissiles", false, "Let LMB fire non-gun turret weapons (unguided, experimental)");
 
             AiTargetsInfantry = Config.Bind("AI", "TargetInfantry", true, "Enemy gun turrets/vehicles engage you while on foot");

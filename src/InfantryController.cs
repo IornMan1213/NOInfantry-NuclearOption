@@ -258,8 +258,12 @@ namespace NOInfantry
 
         internal void AimAt(Vector3 worldPoint)
         {
-            Camera eye = SceneSingleton<CameraStateManager>.i.mainCamera;
-            Vector3 d = worldPoint - eye.transform.position;
+            // In a vehicle the camera orbits a pivot, so aim from the pivot (the camera moves once rotated).
+            Unit v = VehicleControl.Driven;
+            Vector3 from = v != null
+                ? v.transform.position + Vector3.up * (v.definition.height * 0.8f + 1.5f)
+                : SceneSingleton<CameraStateManager>.i.mainCamera.transform.position;
+            Vector3 d = worldPoint - from;
             camState.Yaw = Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg;
             camState.Pitch = -Mathf.Atan2(d.y, new Vector2(d.x, d.z).magnitude) * Mathf.Rad2Deg;
         }
@@ -313,12 +317,13 @@ namespace NOInfantry
             // Ground -> air
             if (InputShim.KeyDown(Plugin.BoardKey.Value) && nearbyAirbase != null) AirbaseServices.OpenAircraftMenu(nearbyAirbase);
 
+            Camera eye = SceneSingleton<CameraStateManager>.i.mainCamera;
             if (weapon == Weapon.Launcher)
             {
-                Camera eye = SceneSingleton<CameraStateManager>.i.mainCamera;
                 launcher.Tick(Controlled, eye, seeking: Aiming, fire: InputShim.MouseDown(0));
                 return;
             }
+            launcher?.Spot(Controlled, eye); // keep guiding a missile in flight after switching back
 
             // Rifle
             if (InputShim.KeyDown(KeyCode.R)) StartReload();

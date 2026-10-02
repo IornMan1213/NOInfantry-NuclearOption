@@ -24,6 +24,12 @@ namespace NOInfantry
         private AudioClip lockClip;
         private float nextBeep;
 
+        // The soldier acts as a spotter: optical/TV seekers start from the faction's tracking data
+        // (NetworkHQ.TryGetKnownPosition), so a target nobody has reported would make them fly blind.
+        private Unit spotTarget;
+        private float spotUntil;
+        private float nextSpot;
+
         private static GameObject aaMissile, atMissile;
         private static string aaName = "-", atName = "-";
         private static bool searched;
@@ -127,6 +133,7 @@ namespace NOInfantry
         // Called every frame while the launcher is the active weapon.
         internal void Tick(PilotDismounted self, Camera cam, bool seeking, bool fire)
         {
+            Spot(self, cam);
             if (!seeking)
             {
                 ClearLock();
@@ -154,6 +161,19 @@ namespace NOInfantry
             if (fire && Locked && Ammo > 0 && Time.time >= nextShotTime) Fire(self, cam);
         }
 
+        // Also called while the launcher is put away, so a missile in flight keeps getting updates.
+        internal void Spot(PilotDismounted self, Camera cam)
+        {
+            Unit t = LockTarget != null ? LockTarget : (Time.time < spotUntil ? spotTarget : null);
+            if (t == null || t.disabled || Time.time < nextSpot || self.NetworkHQ == null) return;
+            nextSpot = Time.time + 0.5f;
+            if (!HasLineOfSight(cam.transform.position, t, self)) return;
+            if (NetworkManagerNuclearOption.i != null && NetworkManagerNuclearOption.i.Server.Active)
+            {
+                self.NetworkHQ.RpcUpdateTrackingInfo(t.persistentID);
+            }
+        }
+
         private void Fire(PilotDismounted self, Camera cam)
         {
             Unit target = LockTarget;
@@ -169,13 +189,22 @@ namespace NOInfantry
                 Plugin.Log.LogWarning("Launcher needs host/single-player.");
                 return;
             }
+            self.NetworkHQ?.RpcUpdateTrackingInfo(target.persistentID);
+            spotTarget = target;
+            spotUntil = Time.time + 30f;
             Transform eye = cam.transform;
             Vector3 pos = eye.position + eye.forward * 1.5f + eye.right * 0.2f;
             Vector3 dir = (eye.forward + Vector3.up * (air ? 0.08f : 0.03f)).normalized;
             Vector3 vel = self.rb.velocity + dir * Plugin.LauncherEjectSpeed.Value;
             Missile m = NetworkSceneSingleton<Spawner>.i.SpawnMissile(prefab, pos, Quaternion.LookRotation(dir), vel, target, self);
             LastLaunched = m;
-            if (m != null) Launched[m] = target;
+            if (m != null)
+            {
+                Launched[m] = target;
+                // Surface targets: AT missiles fired this way can pass a small vehicle without registering
+                // a hit, so arm the game's own proximity fuse on the target (detonates at closest approach).
+                if (!air) m.SetProxyFuse(target.transform, target.rb);
+            }
             Ammo--;
             nextShotTime = Time.time + Plugin.LauncherReload.Value;
             Plugin.Log.LogInfo($"Launched {m?.definition?.unitName} at {target.unitName} ({Vector3.Distance(pos, target.transform.position):F0} m)");

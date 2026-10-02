@@ -66,10 +66,15 @@ namespace NOInfantry
             float best = float.MaxValue;
             foreach (RaycastHit h in Physics.RaycastAll(pos, fwd, 5000f, ~(int)PhysicsLayers.ExclusionZonesMask, QueryTriggerInteraction.Ignore))
             {
-                if (h.collider.transform.IsChildOf(gv.transform) || h.distance >= best) continue;
+                // Ignore everything up to just past the vehicle (camera sits behind it), the vehicle itself
+                // (some colliders aren't parented under its root) and our soldier riding inside it.
+                if (h.distance >= best || h.distance < dist + gv.maxRadius * 1.5f) continue;
+                if (h.collider.transform.IsChildOf(gv.transform) || h.collider.attachedRigidbody == gv.rb) continue;
+                if (InfantryController.Controlled != null && h.collider.transform.IsChildOf(InfantryController.Controlled.transform)) continue;
+                Unit hitUnit = h.collider.GetComponentInParent<IDamageable>()?.GetUnit();
+                if (hitUnit == gv) continue;
                 best = h.distance;
                 VehicleControl.AimPoint = h.point;
-                Unit hitUnit = h.collider.GetComponentInParent<IDamageable>()?.GetUnit();
                 VehicleControl.AimUnit = hitUnit != null && hitUnit.NetworkHQ != gv.NetworkHQ && !hitUnit.disabled ? hitUnit : null;
             }
         }

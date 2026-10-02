@@ -150,10 +150,12 @@ namespace NOInfantry
         }
 
         // A horizontal direction from the soldier with nothing solid in the way for `dist` metres.
-        private Vector3 ClearDirection(float dist)
+        private Vector3 ClearDirection(float dist) =>
+            ClearDirection(soldier.transform.position + Vector3.up * Plugin.EyeHeight.Value,
+                           Flat(SceneSingleton<CameraStateManager>.i.mainCamera.transform.forward).normalized, dist, soldier.transform);
+
+        private Vector3 ClearDirection(Vector3 eye, Vector3 baseDir, float dist, Transform ignore)
         {
-            Vector3 eye = soldier.transform.position + Vector3.up * Plugin.EyeHeight.Value;
-            Vector3 baseDir = Flat(SceneSingleton<CameraStateManager>.i.mainCamera.transform.forward).normalized;
             for (int i = 0; i < 24; i++)
             {
                 Vector3 dir = Quaternion.Euler(0f, i * 15f, 0f) * baseDir;
@@ -161,7 +163,7 @@ namespace NOInfantry
                 bool blocked = false;
                 foreach (RaycastHit h in Physics.RaycastAll(eye, (target - eye).normalized, Vector3.Distance(eye, target), ~(int)PhysicsLayers.ExclusionZonesMask, QueryTriggerInteraction.Ignore))
                 {
-                    if (!h.collider.transform.IsChildOf(soldier.transform)) { blocked = true; break; }
+                    if (!h.collider.transform.IsChildOf(ignore) && !h.collider.transform.IsChildOf(soldier.transform)) { blocked = true; break; }
                 }
                 if (!blocked) return dir;
             }
@@ -238,6 +240,26 @@ namespace NOInfantry
             float moved = Vector3.Distance(Flat(start), Flat(soldier.transform.position));
             Result("walk", moved > 6f, $"moved {moved:F1} m in 4.5 s (expect ~15 with sprint)");
             Shot("walked");
+
+            // Viewmodel poses for visual review.
+            yield return new WaitForSecondsRealtime(0.8f);
+            Shot("pose_hip");
+            InputShim.HoldMouse(1, true);
+            yield return new WaitForSecondsRealtime(0.8f);
+            Shot("pose_ads");
+            InputShim.ReleaseAll();
+            InputShim.Hold(KeyCode.W, true);
+            InputShim.Hold(KeyCode.LeftShift, true);
+            yield return new WaitForSecondsRealtime(0.8f);
+            Shot("pose_sprint");
+            InputShim.ReleaseAll();
+            InputShim.HoldMouse(0, true);
+            yield return new WaitForSecondsRealtime(0.3f);
+            InputShim.ReleaseAll();
+            InputShim.Press(KeyCode.R);
+            yield return new WaitForSecondsRealtime(0.6f);
+            Shot("pose_reload");
+            yield return new WaitForSecondsRealtime(Plugin.ReloadTime.Value);
         }
 
         private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
@@ -400,13 +422,20 @@ namespace NOInfantry
             Result("ground-vehicle steer", turned > 5f, $"yaw change {turned:F0}");
             Shot("vehicle_drive");
 
-            string before = VehicleControl.WeaponSummary();
-            if (enemyTruck != null) InfantryController.Instance.AimAt(enemyTruck.transform.position);
+            List<WeaponStation> stations = VehicleControl.Turrets.Select(t => t.GetWeaponStation()).Where(w => w != null).ToList();
+            int ammoBefore = stations.Sum(w => w.Ammo);
+            // A point the turret can reach with nothing in between (the first version fired into a blast wall).
+            Vector3 turretPos = gv.transform.position + Vector3.up * (gv.definition.height + 1f);
+            Vector3 fireDir = ClearDirection(turretPos, Flat(gv.transform.forward).normalized, 150f, gv.transform);
+            Vector3 aimPoint = Ground(turretPos + fireDir * 150f) + Vector3.up;
+            InfantryController.Instance.AimAt(aimPoint);
+            yield return new WaitForSecondsRealtime(2f); // let the turret traverse
             InputShim.HoldMouse(0, true);
             yield return new WaitForSecondsRealtime(3f);
             InputShim.ReleaseAll();
-            string after = VehicleControl.WeaponSummary();
-            Result("ground-vehicle guns", before != after, $"weapons before [{before}] after [{after}]");
+            int ammoAfter = stations.Sum(w => w.Ammo);
+            Result("ground-vehicle guns", ammoAfter < ammoBefore && VehicleControl.Driven == gv && !gv.disabled,
+                $"turret ammo {ammoBefore} -> {ammoAfter}, still driving={VehicleControl.Driven == gv}, vehicle intact={!gv.disabled}");
             Shot("vehicle_fire");
 
             InputShim.Press(KeyCode.E);

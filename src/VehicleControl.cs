@@ -31,6 +31,10 @@ namespace NOInfantry
 
         private static ShipAI disabledShipAI;
 
+        private static readonly AccessTools.FieldRef<Turret, bool> stowedRef = AccessTools.FieldRefAccess<Turret, bool>("stowed");
+        private static readonly AccessTools.FieldRef<Turret, float> traverseErrorRef = AccessTools.FieldRefAccess<Turret, float>("traverseError");
+        private static readonly AccessTools.FieldRef<Turret, float> elevationErrorRef = AccessTools.FieldRefAccess<Turret, float>("elevationError");
+
         private static readonly Action<Turret, Vector3> aimTurret =
             AccessTools.MethodDelegate<Action<Turret, Vector3>>(AccessTools.Method(typeof(Turret), "AimTurret", new[] { typeof(Vector3) }));
 
@@ -108,6 +112,15 @@ namespace NOInfantry
         // Called every physics step while driving.
         internal static void ApplyInputs()
         {
+            // Idle turrets disable themselves (no FixedUpdate => our aim prefix never runs); keep ours awake.
+            // Moving vehicles stow their turrets (DeployablePart: deployed only after ~5 s stationary) and
+            // Turret.StowForward then pins them forward; under player control we want to shoot on the move.
+            foreach (Turret t in Turrets)
+            {
+                if (t == null) continue;
+                if (stowedRef(t)) t.SetStowed(false);
+                if (!t.enabled) t.enabled = true;
+            }
             if (Driven is GroundVehicle gv)
             {
                 var alloc = (PtrAllocation<GroundVehicleFields>)jobFieldsField.GetValue(gv);
@@ -126,14 +139,36 @@ namespace NOInfantry
             }
         }
 
+        private static float nextFireDiag;
+
         internal static void FireHeld()
         {
             if (Driven == null) return;
+            if (Time.time >= nextFireDiag && Turrets.Exists(t => t != null && t.GetWeapon() != null && t.GetWeapon().Safety))
+            {
+                nextFireDiag = Time.time + 1f;
+                foreach (Turret t in Turrets)
+                {
+                    WeaponStation ws = t.GetWeaponStation();
+                    if (ws == null) continue;
+                    foreach (Weapon w in ws.Weapons)
+                    {
+                        if (w == null) continue;
+                        var tr = Traverse.Create(w);
+                        float err = Mathf.Abs(traverseErrorRef(t)) + Mathf.Abs(elevationErrorRef(t));
+                        var tt = Traverse.Create(t);
+                        Plugin.Log.LogInfo($"[fire] aim point {Vector3.Distance(w.transform.position, AimPoint):F0} m away, unit {AimUnit?.unitName}");
+                        Plugin.Log.LogInfo($"[fire] turret trav={traverseErrorRef(t):F1} elev={elevationErrorRef(t):F1} minElev={tt.Field("minElevation").GetValue()} maxElev={tt.Field("maxElevation").GetValue()} travRange={tt.Field("traverseRange").GetValue()} v={ws.WeaponInfo?.muzzleVelocity} grav={ws.WeaponInfo?.gravMult}");
+                        Plugin.Log.LogInfo($"[fire] {ws.WeaponInfo?.weaponName} {w.GetType().Name} safety={w.Safety} turretEnabled={t.enabled} aimError={err:F1} stationAmmo={ws.Ammo} " +
+                            $"loaded={tr.Field("bulletsLoaded").GetValue()} reload={tr.Field("timeUntilReload").GetValue()} attached={w.IsAttached()}");
+                    }
+                }
+            }
             foreach (Turret t in Turrets)
             {
                 WeaponStation ws = t.GetWeaponStation();
                 if (ws == null || ws.Ammo <= 0 || ws.WeaponInfo == null) continue;
-                if (ws.WeaponInfo.gun)
+                if (ws.WeaponInfo.gun || ws.Weapons.Exists(w => w is Gun))
                 {
                     ws.Fire(Driven, AimUnit);
                 }
@@ -153,11 +188,30 @@ namespace NOInfantry
             {
                 WeaponStation ws = t.GetWeaponStation();
                 if (ws == null || ws.WeaponInfo == null) continue;
-                string name = ws.WeaponInfo.shortName;
-                bool usable = ws.WeaponInfo.gun || Plugin.AllowVehicleMissiles.Value;
+                string name = string.IsNullOrEmpty(ws.WeaponInfo.shortName) ? ws.WeaponInfo.weaponName : ws.WeaponInfo.shortName;
+                bool usable = ws.WeaponInfo.gun || ws.Weapons.Exists(w => w is Gun) || Plugin.AllowVehicleMissiles.Value;
                 parts.Add(usable ? $"{name} {ws.Ammo}" : $"{name} (AI)");
             }
             return string.Join("  ", parts);
+        }
+
+        // Direction to fire so a gun round (muzzle velocity v, gravity g * gravMult) lands on `to`.
+        // Uses the low arc; falls back to straight-line aim if the target is out of reach or for missiles.
+        internal static Vector3 BallisticAim(Vector3 from, Vector3 to, WeaponInfo info)
+        {
+            Vector3 d = to - from;
+            if (info == null || !info.gun || info.muzzleVelocity <= 0f) return d;
+            float g = 9.81f * Mathf.Max(info.gravMult, 0.01f);
+            float v = info.muzzleVelocity;
+            Vector3 flat = new Vector3(d.x, 0f, d.z);
+            float x = flat.magnitude;
+            if (x < 1f) return d;
+            float y = d.y;
+            float v2 = v * v;
+            float disc = v2 * v2 - g * (g * x * x + 2f * y * v2);
+            if (disc < 0f) disc = 0f; // out of range: best (45 deg) shot
+            float angle = Mathf.Atan((v2 - Mathf.Sqrt(disc)) / (g * x));
+            return (flat.normalized * Mathf.Cos(angle) + Vector3.up * Mathf.Sin(angle)) * d.magnitude;
         }
 
         [HarmonyPatch(typeof(Turret), "FixedUpdate")]
@@ -169,7 +223,19 @@ namespace NOInfantry
             {
                 WeaponStation ws = __instance.GetWeaponStation();
                 Transform muzzle = ws != null && ws.Weapons.Count > 0 && ws.Weapons[0] != null ? ws.Weapons[0].transform : __instance.transform;
-                aimTurret(__instance, AimPoint - muzzle.position);
+                aimTurret(__instance, BallisticAim(muzzle.position, AimPoint, ws?.WeaponInfo));
+
+                // AimTurret only releases the safety within 1 deg of the aim point, which a player-moved
+                // camera (or an elevation limit) rarely satisfies. Allow fire within a player tolerance.
+                Weapon safetyWeapon = __instance.GetWeapon();
+                if (safetyWeapon != null)
+                {
+                    // Same error terms the game uses for "on target", just with a wider tolerance.
+                    float error = Mathf.Abs(traverseErrorRef(__instance)) + Mathf.Abs(elevationErrorRef(__instance));
+                    // Keep a safety: when the aim point is outside the turret's limits the barrel can sit pointing
+                    // into its own hull (a test run blew up its own APC with the GMG that way).
+                    safetyWeapon.Safety = error > Plugin.TurretFireTolerance.Value;
+                }
             }
             return false;
         }
