@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace NOInfantry
 {
-    internal enum Kit : byte { Rifleman, AntiTank, AntiAir }
+    internal enum Kit : byte { Rifleman, AntiTank, AntiAir, Medic }
 
     // "Infantry first": deploy on foot from the spawn menu with a kit, capture airbases on foot, a living AI
     // front line, and a motor pool at friendly airbases. Server-authoritative; clients ask through NetSync.
@@ -15,16 +15,18 @@ namespace NOInfantry
     {
         // ---------------- kits ----------------
 
-        internal static string KitName(Kit k) => k == Kit.AntiTank ? "Anti-Tank" : k == Kit.AntiAir ? "Anti-Air" : "Rifleman";
+        internal static string KitName(Kit k) => k == Kit.AntiTank ? "Anti-Tank" : k == Kit.AntiAir ? "Anti-Air" : k == Kit.Medic ? "Medic" : "Rifleman";
 
         internal static string KitBlurb(Kit k) => k == Kit.AntiTank
             ? "Rifle, 2 grenades, guided anti-surface rockets"
             : k == Kit.AntiAir
                 ? "Rifle, 2 grenades, heat-seeking anti-air missiles"
-                : "Rifle, 6 grenades, extra magazines";
+                : k == Kit.Medic
+                    ? "Rifle, 2 grenades, bandages; revives twice as fast"
+                    : "Rifle, 6 grenades, extra magazines";
 
         internal static int KitGrenades(Kit k) => k == Kit.Rifleman ? Plugin.GrenadeCount.Value * 2 : Mathf.Max(1, Plugin.GrenadeCount.Value - 1);
-        internal static int KitRockets(Kit k) => k == Kit.Rifleman ? 0 : Plugin.LauncherAmmo.Value;
+        internal static int KitRockets(Kit k) => k == Kit.Rifleman || k == Kit.Medic ? 0 : Plugin.LauncherAmmo.Value;
         internal static bool KitAllowsAir(Kit k) => k == Kit.AntiAir;
         internal static bool KitAllowsSurface(Kit k) => k == Kit.AntiTank;
 
@@ -65,8 +67,74 @@ namespace NOInfantry
 
         internal static Airbase MenuAirbase(AircraftSelectionMenu m) => m != null ? menuAirbase(m) : null;
 
+        // ---------------- rally points ----------------
+
+        // Server: each player's rally point (global, so floating-origin shifts don't move it).
+        internal static readonly Dictionary<Player, GlobalPosition> Rally = new Dictionary<Player, GlobalPosition>();
+        private static readonly Dictionary<Player, float> rallyPlacedAt = new Dictionary<Player, float>();
+
+        // Local player: our rally point as the server last confirmed it.
+        internal static GlobalPosition? LocalRally;
+        internal static bool DeployAtRally; // the deploy panel's location toggle
+
+        internal static void RequestRally(PilotDismounted soldier)
+        {
+            if (soldier == null) return;
+            if (Combat.IsServer) ServerPlaceRally(soldier);
+            else NetSync.SendSquad(soldier, SquadKinds.Rally);
+        }
+
+        // Server: place (or move) the owner's rally point where the soldier stands. Returns a reason when refused.
+        internal static string ServerPlaceRally(PilotDismounted soldier)
+        {
+            Player player = soldier.Networkplayer;
+            string refused = null;
+            if (player == null) refused = "no player";
+            else if (soldier.disabled || Medical.IsDowned(soldier) || NetSync.InVehicle(soldier)) refused = "must be on your feet";
+            else if (rallyPlacedAt.TryGetValue(player, out float t) && Time.time < t + Plugin.RallyCooldown.Value)
+                refused = $"wait {t + Plugin.RallyCooldown.Value - Time.time:F0} s";
+            else if (EnemiesNear(soldier.NetworkHQ, soldier.transform.position, Plugin.RallyEnemyRadius.Value) > 0) refused = "enemies too close";
+            if (refused != null)
+            {
+                NetSync.SendRallyTo(player, soldier.transform.position, placed: false, refused);
+                return refused;
+            }
+            Rally[player] = soldier.transform.position.ToGlobalPosition();
+            rallyPlacedAt[player] = Time.time;
+            NetSync.SendRallyTo(player, soldier.transform.position, placed: true, "placed");
+            Plugin.Log.LogInfo($"Rally point for {PlayerLabel(player)} at {Rally[player]}");
+            return null;
+        }
+
+        // Enemy soldiers on foot and enemy ground vehicles within `radius`.
+        internal static int EnemiesNear(FactionHQ hq, Vector3 at, float radius)
+        {
+            int n = EnemySoldiersNear(hq, at, radius);
+            foreach (Unit u in UnitRegistry.allUnits)
+            {
+                if (u is GroundVehicle && !u.disabled && u.NetworkHQ != null && u.NetworkHQ != hq && Vector3.Distance(u.transform.position, at) < radius) n++;
+            }
+            return n;
+        }
+
+        // Server, from CaptureTick: enemies overrunning a rally point destroy it.
+        private static void RallyTick()
+        {
+            foreach (Player pl in Rally.Keys.ToList())
+            {
+                if (pl == null) { Rally.Remove(pl); continue; }
+                Vector3 at = Rally[pl].ToLocalPosition();
+                if (pl.HQ == null || EnemiesNear(pl.HQ, at, Plugin.RallyOverrunRadius.Value) > 0)
+                {
+                    Rally.Remove(pl);
+                    NetSync.SendRallyTo(pl, at, placed: false, "overrun by the enemy");
+                    Plugin.Log.LogInfo($"Rally point of {PlayerLabel(pl)} overrun");
+                }
+            }
+        }
+
         // Local player: from the deploy panel (or the test harness).
-        internal static bool RequestDeploy(Airbase airbase, Kit kit)
+        internal static bool RequestDeploy(Airbase airbase, Kit kit, bool atRally = false)
         {
             if (airbase == null || !GameManager.GetLocalPlayer<Player>(out Player player)) return false;
             if (!Combat.IsServer && !NetSync.ServerHasMod)
@@ -77,8 +145,8 @@ namespace NOInfantry
             LocalKit = kit;
             LocalDeployAt = Time.time;
             PlayerPrefsKit = kit;
-            if (Combat.IsServer) ServerDeploy(player, airbase.center.position, kit);
-            else NetSync.SendDeploy(airbase.center.position, kit);
+            if (Combat.IsServer) ServerDeploy(player, airbase.center.position, kit, atRally);
+            else NetSync.SendDeploy(airbase.center.position, kit, atRally);
 
             AircraftSelectionMenu menu = OpenMenu;
             if (menu != null) AccessTools.Method(typeof(AircraftSelectionMenu), "HideSelection").Invoke(menu, null);
@@ -88,18 +156,19 @@ namespace NOInfantry
 
         private static Kit PlayerPrefsKit
         {
-            get => (Kit)Mathf.Clamp(Plugin.LastKit.Value, 0, 2);
+            get => (Kit)Mathf.Clamp(Plugin.LastKit.Value, 0, 3);
             set => Plugin.LastKit.Value = (int)value;
         }
 
         // Server: spawn the player's soldier at a friendly airbase near `near`.
-        internal static PilotDismounted ServerDeploy(Player player, Vector3 near, Kit kit)
+        internal static PilotDismounted ServerDeploy(Player player, Vector3 near, Kit kit, bool atRally = false)
         {
             if (!Combat.IsServer || player == null || player.HQ == null) return null;
             Airbase airbase = FactionRegistry.airbaseLookup.Values
                 .Where(a => a != null && !a.disabled && a.CurrentHQ == player.HQ && a.center != null)
                 .OrderBy(a => (a.center.position - near).sqrMagnitude).FirstOrDefault();
-            if (airbase == null || Vector3.Distance(airbase.center.position, near) > 3000f)
+            bool rally = atRally && Rally.ContainsKey(player);
+            if (!rally && (airbase == null || Vector3.Distance(airbase.center.position, near) > 3000f))
             {
                 Plugin.Log.LogWarning($"Deploy refused for {PlayerLabel(player)}: no friendly airbase there");
                 return null;
@@ -117,7 +186,7 @@ namespace NOInfantry
                 }
             }
 
-            Vector3 pos = DeploySpot(airbase);
+            Vector3 pos = rally ? RallySpot(Rally[player].ToLocalPosition()) : DeploySpot(airbase);
             Quaternion rot = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
             GameObject go = Object.Instantiate(GameAssets.i.pilotDismounted);
             go.transform.SetPositionAndRotation(pos, rot);
@@ -134,12 +203,12 @@ namespace NOInfantry
             Kits[p] = kit;
             NetworkManagerNuclearOption.i.ServerObjectManager.Spawn(go, player.Owner); // owned like the game's ejected pilots
             if (AutoTest.Requested) InfantryController.Instance.StartCoroutine(TraceSpawn(p));
-            Plugin.Log.LogInfo($"Deployed {PlayerLabel(player)} on foot at {AirbaseName(airbase)} as {KitName(kit)}: global {pos.ToGlobalPosition()}, {Vector3.Distance(pos, airbase.center.position):F0} m from the centre");
+            Plugin.Log.LogInfo(rally
+                ? $"Deployed {PlayerLabel(player)} on foot at their rally point as {KitName(kit)}: global {pos.ToGlobalPosition()}"
+                : $"Deployed {PlayerLabel(player)} on foot at {AirbaseName(airbase)} as {KitName(kit)}: global {pos.ToGlobalPosition()}, {Vector3.Distance(pos, airbase.center.position):F0} m from the centre");
             return p;
         }
 
-        // Open dry ground around the airbase centre. Only terrain and buildings count as ground: the selection
-        // menu's preview aircraft once caught the ray, and the soldier fell into the sea when it was removed.
         // Instantiate + transform.position leaves the Rigidbody at the prefab's origin until physics syncs, and the first
         // physics step then moved the soldier there (the local origin: in one test, the sea 500 m away). Move both.
         internal static void PlaceBody(GameObject go, Vector3 pos, Quaternion rot)
@@ -162,6 +231,21 @@ namespace NOInfantry
             }
         }
 
+        private static Vector3 RallySpot(Vector3 at)
+        {
+            for (int i = 0; i < 8; i++)
+            {
+                Vector3 offset = Quaternion.Euler(0f, i * 45f, 0f) * Vector3.forward * (2f + i * 0.5f);
+                if (!StaticGround(at + offset, out Vector3 g) || g.GlobalY() < 0.5f) continue;
+                if (Physics.CheckSphere(g + Vector3.up * 1.2f, 0.7f, ~(int)PhysicsLayers.ExclusionZonesMask, QueryTriggerInteraction.Ignore)) continue;
+                return g + Vector3.up * SoldierMotor.HoverHeight;
+            }
+            StaticGround(at, out Vector3 fallback);
+            return fallback + Vector3.up * SoldierMotor.HoverHeight;
+        }
+
+        // Open dry ground around the airbase centre. Only terrain and buildings count as ground: the selection
+        // menu's preview aircraft once caught the ray, and the soldier fell into the sea when it was removed.
         private static Vector3 DeploySpot(Airbase airbase)
         {
             Vector3 c = airbase.center.position;
@@ -214,7 +298,8 @@ namespace NOInfantry
                 Plugin.Log.LogInfo($"Deploy panel shown for {AirbaseName(airbase)} (map open {DynamicMap.mapMaximized}, menu active {menu.isActiveAndEnabled})");
             }
 
-            float w = 330f, h = 172f;
+            float w = 330f, h = LocalRally.HasValue ? 252f : 214f;
+            if (!LocalRally.HasValue) DeployAtRally = false;
             var box = new Rect(Screen.width - w - 24f, Screen.height * 0.5f - h * 0.5f, w, h);
             Color prev = GUI.color;
             GUI.color = new Color(0f, 0f, 0f, 0.7f);
@@ -222,14 +307,21 @@ namespace NOInfantry
             GUI.color = Color.white;
             GUI.Label(new Rect(box.x + 12f, box.y + 8f, w - 24f, 22f), $"<b>DEPLOY ON FOOT</b>  at {AirbaseName(airbase)}");
             float y = box.y + 34f;
+            if (LocalRally.HasValue)
+            {
+                float km = Vector3.Distance(LocalRally.Value.ToLocalPosition(), airbase.center.position) / 1000f;
+                if (GUI.Button(new Rect(box.x + 12f, y, 150f, 30f), (DeployAtRally ? "" : "> ") + "Airbase")) DeployAtRally = false;
+                if (GUI.Button(new Rect(box.x + 168f, y, 150f, 30f), (DeployAtRally ? "> " : "") + $"Rally ({km:F1} km)")) DeployAtRally = true;
+                y += 38f;
+            }
             Kit current = PlayerPrefsKit;
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < 4; i++)
             {
                 Kit k = (Kit)i;
                 string label = $"{(k == current ? "> " : "")}{KitName(k)}";
                 if (GUI.Button(new Rect(box.x + 12f, y, 110f, 36f), label))
                 {
-                    RequestDeploy(airbase, k);
+                    RequestDeploy(airbase, k, DeployAtRally);
                 }
                 GUI.Label(new Rect(box.x + 128f, y + 2f, w - 140f, 36f), $"<size=11>{KitBlurb(k)}</size>");
                 y += 42f;
@@ -248,13 +340,15 @@ namespace NOInfantry
             if (Time.time < nextCaptureTick) return;
             nextCaptureTick = Time.time + 1f;
             float strength = Plugin.GroundWarEnabled.Value ? Plugin.SoldierCaptureStrength.Value : 0f;
+            RallyTick();
+            Transport.Tick();
 
             var want = new HashSet<Unit>();
             if (strength > 0f)
             {
                 foreach (PilotDismounted p in NetSync.AllProtected())
                 {
-                    if (p != null && !p.disabled && !NetSync.InVehicle(p)) want.Add(p);
+                    if (p != null && !p.disabled && !NetSync.InVehicle(p) && !Medical.IsDowned(p)) want.Add(p);
                 }
             }
             foreach (Unit u in want)
@@ -338,7 +432,18 @@ namespace NOInfantry
                 Vector3 dir = (home - objective.center.position);
                 dir.y = 0f;
                 dir = dir.sqrMagnitude > 1f ? dir.normalized : Vector3.forward;
-                float standOff = Mathf.Min(Plugin.WaveStandOff.Value, Vector3.Distance(home, objective.center.position) * 0.5f);
+                float apart = Vector3.Distance(home, objective.center.position);
+                if (Plugin.TruckTransport.Value && Transport.TruckDef != null && apart > Plugin.DismountDistance.Value + 800f)
+                {
+                    // By truck from up to ConvoyDistance out, on our side of the objective.
+                    Vector3 start = FindDry(objective.center.position + dir * Mathf.Min(Plugin.ConvoyDistance.Value, apart * 0.7f), dir);
+                    if (start != Vector3.zero && Transport.Send(hq, start, objective, Plugin.WaveSize.Value) != null)
+                    {
+                        WavesSent++;
+                        continue;
+                    }
+                }
+                float standOff = Mathf.Min(Plugin.WaveStandOff.Value, apart * 0.5f);
                 Vector3 spot = FindDry(objective.center.position + dir * (objective.GetRadius() + standOff), dir);
                 if (spot == Vector3.zero) continue;
                 SpawnSquadAt(hq, spot, objective, AiOrder.Free);
@@ -451,6 +556,8 @@ namespace NOInfantry
             Deployed.Clear();
             boosted.Clear();
             lastVehicle.Clear();
+            Rally.Clear();
+            rallyPlacedAt.Clear();
             issued.Clear();
             pool = null;
             onLand.Clear();
@@ -462,6 +569,7 @@ namespace NOInfantry
     internal static class SquadKinds
     {
         internal const byte Fireteam = 1, Patrol = 2;
+        internal const byte Rally = 3;
         internal const byte VehicleBase = 32; // 32..40: motor pool vehicle index
     }
 }

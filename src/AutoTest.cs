@@ -594,8 +594,8 @@ namespace NOInfantry
                 if (!shot && AiSquads.ShotsFired - shots0 > 20) { Shot("firefight"); shot = true; }
                 yield return new WaitForSecondsRealtime(0.5f);
             }
-            int patrolDown = patrol.Count(p => p == null || p.disabled);
-            int teamLeft = fireteam.Count(p => p != null && !p.disabled); // explicit list: Unity null-equality fooled the leader check
+            int patrolDown = patrol.Count(p => p == null || p.disabled || Medical.IsDowned(p));
+            int teamLeft = fireteam.Count(p => p != null && !p.disabled && !Medical.IsDowned(p)); // explicit list: Unity null-equality fooled the leader check
             int teamDown = fireteam.Count - teamLeft;
             // A real exchange of fire with casualties on either side (the outcome itself is a fair fight).
             Result("firefight", AiSquads.ShotsFired - shots0 > 0 && AiSquads.HitsLanded - hits0 > 0 && patrolDown + teamDown > 0,
@@ -694,6 +694,12 @@ namespace NOInfantry
             float followDist = TeamDistance(team, me.transform.position);
             Result("order follow", followDist < 15f, $"team {followDist:F1} m from the leader");
 
+            // Rally point where we stand (used later to redeploy as a medic).
+            InputShim.Press(Plugin.RallyKey.Value);
+            yield return new WaitForSecondsRealtime(1f);
+            float rallyOff = GroundWar.LocalRally.HasValue ? Vector3.Distance(GroundWar.LocalRally.Value.ToLocalPosition(), me.transform.position) : -1f;
+            Result("rally placed", GroundWar.LocalRally.HasValue && rallyOff < 3f, $"rally {(GroundWar.LocalRally.HasValue ? "set" : "missing")}, {rallyOff:F1} m from us");
+
             // 4. Motor pool at the airbase (funds topped up so the test doesn't depend on the economy).
             Vector3 home = Ground(airbase.center.position + airbase.center.forward * 60f) + Vector3.up * 1.5f;
             me.transform.position = home;
@@ -727,17 +733,101 @@ namespace NOInfantry
             List<AiSoldier> movers = AiSquads.All.Values.Where(a => a.Objective != null && a.Leader == null && a.Pilot != null).ToList();
             Dictionary<AiSoldier, float> d0 = movers.ToDictionary(a => a, a => Vector3.Distance(a.Pilot.transform.position, a.Objective.center.position));
             foreach (AiSoldier a in movers) Log($"  front t0 {a.Pilot.UniqueName}: {d0[a]:F0} m to go, globalY {a.Pilot.transform.position.GlobalY():F1}, vel {a.Pilot.rb.velocity.magnitude:F1}");
-            yield return new WaitForSecondsRealtime(10f);
+            yield return new WaitForSecondsRealtime(25f);
+            foreach (Convoy c in Transport.Convoys)
+                Log($"  convoy {c.Truck?.unitName}: speed {(c.Truck != null ? c.Truck.speed : 0f):F1} m/s, {c.Riders.Count} aboard, {(c.Truck != null ? Vector3.Distance(c.Truck.transform.position, c.Objective.center.position) : -1f):F0} m to go");
             foreach (AiSoldier a in movers.Where(m => m.Pilot != null && !m.Pilot.disabled))
                 Log($"  front t10 {a.Pilot.UniqueName}: {Vector3.Distance(a.Pilot.transform.position, a.Objective.center.position):F0} m to go, globalY {a.Pilot.transform.position.GlobalY():F1}, vel {a.Pilot.rb.velocity.magnitude:F1}, wish {a.Wish.magnitude:F1}, target {a.Target?.unitName}, kinematic {a.Pilot.rb.isKinematic}");
             int closer = movers.Count(a => a.Pilot != null && !a.Pilot.disabled && a.Objective != null && Vector3.Distance(a.Pilot.transform.position, a.Objective.center.position) < d0[a] - 15f);
-            Result("front line advance", closer > 0, $"{closer}/{movers.Count} front-line soldiers moved 15+ m toward their objective in 10 s");
+            Result("front line advance", closer > 0, $"{closer}/{movers.Count} front-line soldiers moved 15+ m toward their objective in 25 s (trucks sent {Transport.Sent})");
+            Convoy first = Transport.Convoys.FirstOrDefault(c => c.Riders.Count > 0);
+            if (first != null)
+            {
+                List<AiSoldier> riders = first.Riders.ToList();
+                Transport.Dismount(first, "test");
+                Transport.Convoys.Remove(first);
+                yield return new WaitForSecondsRealtime(3f);
+                int onFoot = riders.Count(r => r.Pilot != null && !r.Pilot.disabled && r.Riding == null && r.Pilot.transform.position.GlobalY() > 0.5f);
+                Result("truck dismount", onFoot == riders.Count, $"{onFoot}/{riders.Count} riders on the ground beside the {first.Truck?.unitName}");
+            }
 
-            // 6. Killed -> map, to redeploy.
+            // 6. Medical: go down, get revived by the fireteam, revive a rifleman, bandage as a medic.
+            yield return MedicalSteps();
+            me = InfantryController.Controlled;
+            if (me == null) yield break;
+
+            // 7. Killed -> map, to redeploy (an overwhelming hit: no going down).
             me.TakeDamage(5000f, 0f, 0f, 0f, 0f, PersistentID.None);
             yield return WaitUntil(() => DynamicMap.mapMaximized, 12f);
             Result("death -> map", DynamicMap.mapMaximized && InfantryController.Controlled == null, $"map open {DynamicMap.mapMaximized}, infantry released {InfantryController.Controlled == null}");
             Shot("respawn_map");
+        }
+
+        private IEnumerator MedicalSteps()
+        {
+            PilotDismounted me = InfantryController.Controlled;
+            Vector3 home = Ground(airbase.center.position + airbase.center.forward * 60f) + Vector3.up * 1.5f;
+            me.transform.position = home;
+            me.rb.position = home;
+            me.rb.velocity = Vector3.zero;
+            InputShim.Press(Plugin.FireteamKey.Value); // top the fireteam up
+            yield return new WaitForSecondsRealtime(5f);
+
+            // a) A lethal (but not overwhelming) hit puts us down; our riflemen come and revive us.
+            me.TakeDamage(170f, 0f, 0f, 0f, 0f, PersistentID.None);
+            yield return new WaitForSecondsRealtime(0.5f);
+            bool down = InfantryController.Instance.Downed;
+            Result("go down", down && !me.disabled && Medical.Health(me) <= 1.01f, $"downed {down}, alive {!me.disabled}, HP {Medical.Health(me):F1}, bleed {Medical.BleedLeft(me):F0} s");
+            Shot("downed");
+            yield return WaitUntil(() => me == null || me.disabled || !Medical.IsDowned(me), Plugin.ReviveTime.Value + 20f);
+            Result("AI revives player", me != null && !me.disabled && !Medical.IsDowned(me) && Medical.Health(me) > 20f,
+                $"alive {me != null && !me.disabled}, downed {Medical.IsDowned(me)}, HP {Medical.Health(me):F0}, revives {Medical.Revives}");
+            if (me == null || me.disabled) yield break;
+
+            // b) Down a rifleman (the others sent away) and revive it ourselves with the interact key.
+            List<AiSoldier> team = AiSquads.All.Values.Where(a => (object)a.Leader == me && a.Pilot != null && !a.Pilot.disabled).ToList();
+            if (team.Count > 0)
+            {
+                AiSquads.Despawn(a => a != team[0]);
+                PilotDismounted r = team[0].Pilot;
+                r.TakeDamage(170f, 0f, 0f, 0f, 0f, PersistentID.None);
+                yield return new WaitForSecondsRealtime(0.5f);
+                Vector3 next = r.transform.position + Flat(r.transform.right).normalized * 1.2f;
+                me.transform.position = next;
+                me.rb.position = next;
+                me.rb.velocity = Vector3.zero;
+                yield return new WaitForSecondsRealtime(0.5f);
+                Result("rifleman down", Medical.IsDowned(r), $"{r.unitName} downed {Medical.IsDowned(r)}");
+                int revives0 = Medical.Revives;
+                InputShim.Hold(Plugin.InteractKey.Value, true);
+                yield return new WaitForSecondsRealtime(1f);
+                Shot("reviving");
+                yield return WaitUntil(() => !Medical.IsDowned(r), Plugin.ReviveTime.Value + 3f);
+                InputShim.ReleaseAll();
+                Result("player revives AI", !Medical.IsDowned(r) && !r.disabled && Medical.Revives > revives0, $"{r.unitName} downed {Medical.IsDowned(r)}, HP {Medical.Health(r):F0}");
+            }
+
+            // c) Redeploy as a medic, take a wound, bandage ourselves.
+            if (!AirbaseServices.OpenAircraftMenu(airbase)) yield break;
+            yield return WaitUntil(() => GroundWar.OpenMenu != null, 5f);
+            PilotDismounted old = me;
+            bool rallyKnown = GroundWar.LocalRally.HasValue;
+            GroundWar.RequestDeploy(GroundWar.MenuAirbase(GroundWar.OpenMenu) ?? airbase, Kit.Medic, atRally: rallyKnown);
+            yield return WaitUntil(() => InfantryController.Controlled != null && InfantryController.Controlled != old, 20f);
+            me = InfantryController.Controlled;
+            if (me == null || me == old) { Result("medic deploy", false, "no soldier"); yield break; }
+            float fromRally = rallyKnown ? Vector3.Distance(Flat(GroundWar.LocalRally.Value.ToLocalPosition()), Flat(me.transform.position)) : -1f;
+            Result("deploy at rally", rallyKnown && fromRally < 12f, $"medic deployed {fromRally:F1} m from the rally point");
+            InputShim.Scripted = true;
+            yield return new WaitForSecondsRealtime(1f);
+            me.TakeDamage(60f, 0f, 0f, 0f, 0f, PersistentID.None);
+            yield return new WaitForSecondsRealtime(0.5f);
+            float hurt = Medical.Health(me);
+            int b0 = InfantryController.Instance.Bandages;
+            InputShim.Press(Plugin.InteractKey.Value);
+            yield return new WaitForSecondsRealtime(1f);
+            Result("medic bandage", Medical.Health(me) > hurt + 10f && InfantryController.Instance.Bandages == b0 - 1,
+                $"kit {InfantryController.Instance.CurrentKit}, HP {hurt:F0} -> {Medical.Health(me):F0}, bandages {b0} -> {InfantryController.Instance.Bandages}");
         }
 
         private IEnumerator AirbaseTest()

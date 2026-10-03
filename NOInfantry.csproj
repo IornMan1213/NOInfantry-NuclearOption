@@ -32,7 +32,7 @@
   </ItemGroup>
 
   <!-- Every build drops the latest DLL into the game's plugins folder. -->
-  <Target Name="DeployToPlugins" AfterTargets="Build">
+  <Target Name="DeployToPlugins" AfterTargets="Build" Condition="'$(NoDeploy)' != 'true'">
     <MakeDir Directories="$(NuclearOptionPath)\BepInEx\plugins\NOInfantry" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(NuclearOptionPath)\BepInEx\plugins\NOInfantry" />
     <ItemGroup>

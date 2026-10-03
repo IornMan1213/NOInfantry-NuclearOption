@@ -13,14 +13,16 @@ namespace NOInfantry
     internal class AiSoldier
     {
         internal AiOrder Order;               // fireteams: what their leader told them (patrols ignore it)
-        internal Vector3 OrderPos;            // Hold/Move: formation centre
+        // Stored as global positions: the game shifts its floating origin, which would move a stored local Vector3.
+        private GlobalPosition orderPos, patrolGoal;
+        internal Vector3 OrderPos { get => orderPos.ToLocalPosition(); set => orderPos = value.ToGlobalPosition(); } // Hold/Move: formation centre
         internal float OrderYaw;              // Hold/Move: formation facing
         internal Airbase Objective;           // Free: airbase to take
         internal Vector3 FreeOffset;          // Free: spread around the objective
         internal PilotDismounted Pilot;
         internal PilotDismounted Leader;      // friendly fireteam: follow this soldier
         internal Vector3 FormationOffset;     // in the leader's yaw frame
-        internal Vector3 PatrolGoal;          // patrols: where to advance
+        internal Vector3 PatrolGoal { get => patrolGoal.ToLocalPosition(); set => patrolGoal = value.ToGlobalPosition(); } // patrols: where to advance
         internal bool IsPatrol;
         internal Unit Target;
         internal float Yaw;
@@ -31,6 +33,10 @@ namespace NOInfantry
         internal float StuckTime;
         internal int BlockedShots;   // friendly in the line of fire
         internal Vector3 LastPos;
+        internal PilotDismounted ReviveTarget; // going to (or treating) a downed friend
+        internal GroundVehicle Riding;         // aboard a transport (Transport.cs)
+        internal int Seat;
+        internal float ReviveDoneAt;
     }
 
     internal static class AiSquads
@@ -135,9 +141,29 @@ namespace NOInfantry
         internal static void Step(AiSoldier ai)
         {
             PilotDismounted p = ai.Pilot;
+            if (ai.Riding != null)
+            {
+                // Aboard: ride on the back of the truck (collider off), nothing else.
+                GroundVehicle t = ai.Riding;
+                if (t == null || t.disabled) return; // Transport.Tick dismounts the survivors
+                Vector3 seat = Transport.Seat(t, ai.Seat);
+                p.transform.position = seat;
+                p.rb.position = seat;
+                p.rb.velocity = t.rb.velocity;
+                p.rb.angularVelocity = Vector3.zero;
+                p.rb.MoveRotation(Quaternion.Euler(0f, t.transform.eulerAngles.y + (ai.Seat % 2 == 0 ? -90f : 90f), 0f));
+                return;
+            }
+            if (Medical.IsDowned(p))
+            {
+                ai.Target = null;
+                ai.ReviveTarget = null;
+                SoldierMotor.Step(p, ai.Yaw, Vector3.zero, jump: false, downed: true);
+                return;
+            }
             if (Time.time >= ai.NextThink) Think(ai);
             SoldierMotor.Step(p, ai.Yaw, ai.Wish, jump: false);
-            if (ai.Target != null && Time.time >= ai.NextShot) Shoot(ai);
+            if (ai.Target != null && Time.time >= ai.NextShot && ai.ReviveDoneAt == 0f) Shoot(ai);
         }
 
         private static void Think(AiSoldier ai)
@@ -159,6 +185,8 @@ namespace NOInfantry
                 ai.NextShot = Mathf.Max(ai.NextShot, Time.time + Random.Range(0.6f, 1.4f));
                 ai.BurstLeft = 0;
             }
+
+            if (ThinkRevive(ai, pos)) return;
 
             // Leader killed or gone: the riflemen carry on by themselves.
             if ((object)ai.Leader != null && (ai.Leader == null || ai.Leader.disabled))
@@ -256,6 +284,46 @@ namespace NOInfantry
             }
         }
 
+        // Go to a downed friend nobody else is helping (the player first), kneel for ReviveTime, revive. Returns true
+        // while busy with it (movement already set).
+        private static bool ThinkRevive(AiSoldier ai, Vector3 pos)
+        {
+            PilotDismounted p = ai.Pilot;
+            if (!Plugin.ReviveEnabled.Value) return false;
+            PilotDismounted t = ai.ReviveTarget;
+            if (t == null || t.disabled || !Medical.IsDowned(t))
+            {
+                ai.ReviveTarget = null;
+                ai.ReviveDoneAt = 0f;
+                // Not while trading fire at close range; a downed friend is otherwise the priority.
+                if (ai.Target != null && Vector3.Distance(ai.Target.transform.position, pos) < 120f) return false;
+                t = Medical.DownedNear(p, 80f)
+                    .Where(d => !All.Values.Any(o => o != ai && (object)o.ReviveTarget == d))
+                    .OrderBy(d => NetSync.IsControlled(d) ? 0 : 1).ThenBy(d => Vector3.Distance(d.transform.position, pos))
+                    .FirstOrDefault();
+                if (t == null) return false;
+                ai.ReviveTarget = t;
+                Plugin.Log.LogInfo($"{p.unitName} going to revive {t.unitName}");
+            }
+            Vector3 to = Flat(t.transform.position - pos);
+            if (to.magnitude > 1.8f)
+            {
+                ai.ReviveDoneAt = 0f;
+                ai.Wish = to.normalized * (to.magnitude > 8f ? Plugin.SprintSpeed.Value : Plugin.WalkSpeed.Value);
+                ai.Yaw = Quaternion.LookRotation(to).eulerAngles.y;
+                return true;
+            }
+            ai.Wish = Vector3.zero;
+            if (ai.ReviveDoneAt == 0f) ai.ReviveDoneAt = Time.time + Plugin.ReviveTime.Value;
+            else if (Time.time >= ai.ReviveDoneAt)
+            {
+                Medical.Revive(p, t, medic: false);
+                ai.ReviveTarget = null;
+                ai.ReviveDoneAt = 0f;
+            }
+            return true;
+        }
+
         private static void Shoot(AiSoldier ai)
         {
             PilotDismounted p = ai.Pilot;
@@ -343,7 +411,7 @@ namespace NOInfantry
             foreach (Unit u in UnitRegistry.allUnits)
             {
                 if (u == null || u.disabled || u == self || u.NetworkHQ == null || u.NetworkHQ == self.NetworkHQ) continue;
-                bool soldier = u is PilotDismounted pd && NetSync.IsProtectedOrAi(pd) && !NetSync.InVehicle(pd);
+                bool soldier = u is PilotDismounted pd && NetSync.IsProtectedOrAi(pd) && !NetSync.InVehicle(pd) && !Medical.IsDowned(pd);
                 bool softVehicle = u is GroundVehicle && u.definition != null && u.definition.armorTier <= 0;
                 if (!soldier && !softVehicle) continue;
                 float d = Vector3.Distance(eye, u.transform.position);

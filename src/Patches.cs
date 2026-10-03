@@ -49,7 +49,7 @@ namespace NOInfantry
             if (weaponStation?.WeaponInfo == null || !weaponStation.WeaponInfo.gun) return;
             if (!trackingInfo.TryGetUnit(out Unit unit) || !(unit is PilotDismounted p) || !NetSync.IsProtectedOrAi(p)) return;
             // While seated the pilot's collider is off, so AI would waste fire on it; the vehicle is a target anyway.
-            if (NetSync.InVehicle(p) || analyzer.NetworkHQ == p.NetworkHQ) return;
+            if (NetSync.InVehicle(p) || analyzer.NetworkHQ == p.NetworkHQ || Medical.IsDowned(p)) return;
 
             float maxRange = weaponStation.WeaponInfo.targetRequirements.maxRange;
             if (targetDistance < 0f) targetDistance = Vector3.Distance(analyzer.transform.position, p.transform.position);
@@ -82,6 +82,15 @@ namespace NOInfantry
             if (!NetSync.IsProtected(__instance)) return;
             UnitRegistry.TryGetUnit(dealerID, out Unit dealer);
             Plugin.Log.LogInfo($"Soldier {__instance.UniqueName} hit: pierce {pierceDamage:F0} blast {blastDamage:F0} fire {fireDamage:F0} collision {collisionDamage:F0} by {dealer?.unitName ?? "?"}");
+        }
+
+        // Lethal hits put soldiers on foot down instead of killing them (Medical). Runs after the diagnostics prefix.
+        [HarmonyPatch(typeof(PilotDismounted), nameof(PilotDismounted.TakeDamage))]
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.Low)]
+        private static bool PilotDownedPrefix(PilotDismounted __instance, float pierceDamage, float blastDamage, float amountAffected, float fireDamage)
+        {
+            return Medical.OnDamage(__instance, pierceDamage, blastDamage, amountAffected, fireDamage);
         }
 
         [HarmonyPatch(typeof(Missile), nameof(Missile.TakeDamage))]

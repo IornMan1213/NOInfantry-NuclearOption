@@ -61,6 +61,12 @@ namespace NOInfantry
         private float noticeUntil;
         private Airbase zoneAirbase;            // the airbase whose capture zone we're standing in
         internal Kit? CurrentKit => kit;
+        private int bandages;
+        private float interactHeld;             // seconds the interact key has been held on the current target
+        private PilotDismounted interactTarget;
+        private float giveUpHeld;
+        internal int Bandages => bandages;
+        internal bool Downed => Controlled != null && Medical.IsDowned(Controlled);
         private Launcher launcher;
         private Airbase nearbyAirbase;
         private float lastHp = 100f;
@@ -72,6 +78,7 @@ namespace NOInfantry
         private void Awake()
         {
             Instance = this;
+            NetSync.RallyNotice += text => Notice(text);
         }
 
         private void Update()
@@ -125,7 +132,7 @@ namespace NOInfantry
             {
                 KeepCamera();
                 ReadInput();
-                eyeOffset = Mathf.MoveTowards(eyeOffset, StanceEyeOffset(CurrentStance), Time.deltaTime * 2.5f);
+                eyeOffset = Mathf.MoveTowards(eyeOffset, Downed ? -0.95f : StanceEyeOffset(CurrentStance), Time.deltaTime * 2.5f);
                 if (VehicleControl.Driven == null && footsteps != null)
                 {
                     float hspeed = new Vector2(Controlled.rb.velocity.x, Controlled.rb.velocity.z).magnitude;
@@ -265,6 +272,7 @@ namespace NOInfantry
             ammo = Plugin.MagazineSize.Value;
             reloadDoneTime = 0f;
             grenades = kit.HasValue ? GroundWar.KitGrenades(kit.Value) : Plugin.GrenadeCount.Value;
+            bandages = kit == Kit.Medic ? Plugin.Bandages.Value : 0;
             CurrentStance = Stance.Stand;
             eyeOffset = 0f;
             if (footsteps == null) footsteps = new Footsteps(gameObject);
@@ -369,6 +377,20 @@ namespace NOInfantry
             camState.Yaw += look.x;
             camState.Pitch = Mathf.Clamp(camState.Pitch - look.y, -85f, 85f);
 
+            if (Downed)
+            {
+                // Down: look around, wait for help, or hold Space to give up (respawn).
+                giveUpHeld = InputShim.Key(KeyCode.Space) ? giveUpHeld + Time.deltaTime : 0f;
+                if (giveUpHeld > 2f)
+                {
+                    giveUpHeld = -999f;
+                    Medical.Request(Controlled, Controlled, Medical.KindGiveUp, false);
+                }
+                return;
+            }
+            giveUpHeld = 0f;
+            ReadInteract();
+
             if (InputShim.KeyDown(Plugin.UseKey.Value))
             {
                 if (VehicleControl.Driven != null) { LeaveVehicle(); return; }
@@ -419,6 +441,8 @@ namespace NOInfantry
             if (scroll != 0f) SelectWeapon(weapon == Weapon.Rifle ? Weapon.Launcher : Weapon.Rifle);
             if (InputShim.KeyDown(KeyCode.G) && grenades > 0) ThrowGrenade();
 
+            if (InputShim.KeyDown(Plugin.RallyKey.Value) && Plugin.GroundWarEnabled.Value) GroundWar.RequestRally(Controlled);
+
             // AI squads
             if (InputShim.KeyDown(Plugin.FireteamKey.Value)) SquadCommands.Request(Controlled, 1);
             if (InputShim.KeyDown(Plugin.PatrolKey.Value)) SquadCommands.Request(Controlled, 2);
@@ -445,6 +469,44 @@ namespace NOInfantry
             {
                 if (ammo > 0) Fire();
                 else StartReload();
+            }
+        }
+
+        // Interact (F): hold on a downed friend to revive; medics tap to bandage the friend in front (or themselves).
+        private void ReadInteract()
+        {
+            if (!Plugin.ReviveEnabled.Value || VehicleControl.Driven != null) { interactHeld = 0f; return; }
+            PilotDismounted me = Controlled;
+            PilotDismounted downed = Medical.DownedNear(me, 2.5f).OrderBy(d => Vector3.Distance(d.transform.position, me.transform.position)).FirstOrDefault();
+            bool medic = kit == Kit.Medic;
+            if (downed != null && InputShim.Key(Plugin.InteractKey.Value))
+            {
+                if (downed != interactTarget) { interactTarget = downed; interactHeld = 0f; }
+                interactHeld += Time.deltaTime;
+                if (interactHeld >= Plugin.ReviveTime.Value * (medic ? 0.5f : 1f))
+                {
+                    Medical.Request(me, downed, Medical.KindRevive, medic);
+                    Notice($"Revived {downed.unitName}");
+                    interactHeld = 0f;
+                    interactTarget = null;
+                }
+                return;
+            }
+            interactHeld = 0f;
+            interactTarget = downed;
+            if (downed == null && medic && InputShim.KeyDown(Plugin.InteractKey.Value))
+            {
+                if (bandages <= 0) { Notice("No bandages left"); return; }
+                Transform eye = SceneSingleton<CameraStateManager>.i.mainCamera.transform;
+                PilotDismounted friend = UnitRegistry.allUnits.OfType<PilotDismounted>()
+                    .Where(u => u != me && !u.disabled && u.NetworkHQ == me.NetworkHQ && Vector3.Distance(u.transform.position, me.transform.position) < 3f
+                                && Vector3.Angle(eye.forward, u.transform.position - eye.position) < 45f)
+                    .OrderBy(u => Vector3.Distance(u.transform.position, me.transform.position)).FirstOrDefault();
+                PilotDismounted target = friend ?? me;
+                if (Medical.Health(target) >= 99.5f) { Notice(friend != null ? $"{friend.unitName} isn't hurt" : "You aren't hurt"); return; }
+                Medical.Request(me, target, Medical.KindHeal, true);
+                bandages--;
+                Notice($"Bandaged {(friend != null ? friend.unitName : "yourself")} ({bandages} left)");
             }
         }
 
@@ -671,6 +733,12 @@ namespace NOInfantry
                 rb.angularVelocity = Vector3.zero;
                 return;
             }
+            if (Downed)
+            {
+                grounded = SoldierMotor.Step(pilot, camState.Yaw, Vector3.zero, jump: false, downed: true);
+                jumpQueued = false;
+                return;
+            }
             float speed = sprint ? Plugin.SprintSpeed.Value : Plugin.WalkSpeed.Value;
             speed *= StanceSpeed(CurrentStance);
             if (Aiming) speed *= 0.5f;
@@ -710,6 +778,65 @@ namespace NOInfantry
             GUI.color = Color.white;
             GUI.Label(new Rect(20f, Screen.height - 84f, 700f, 24f), $"{gv.unitName}   {Mathf.Abs(gv.speed) * 3.6f:F0} km/h   {VehicleControl.WeaponSummary()}");
             GUI.Label(new Rect(20f, Screen.height - 60f, 500f, 24f), $"WASD drive   LMB fire   RMB zoom   [{Plugin.UseKey.Value}] get out");
+        }
+
+        private void DrawMedical(float cx, float cy)
+        {
+            if (!Plugin.ReviveEnabled.Value) return;
+            Camera cam = SceneSingleton<CameraStateManager>.i.mainCamera;
+            if (Downed)
+            {
+                GUI.color = new Color(0.5f, 0f, 0f, 0.45f);
+                GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+                GUI.color = Color.white;
+                float left = Mathf.Max(0f, Medical.BleedLeft(Controlled));
+                GUI.Label(new Rect(cx - 200f, cy - 40f, 400f, 24f), $"<b>DOWN</b>  -  bleeding out in {left:F0} s");
+                GUI.Label(new Rect(cx - 200f, cy - 16f, 400f, 24f), "Wait for a teammate or medic to revive you");
+                GUI.Label(new Rect(cx - 200f, cy + 8f, 400f, 24f), "Hold [Space] to give up and redeploy");
+                return;
+            }
+            // Downed friendlies: a red cross over each one within 200 m.
+            foreach (Unit u in UnitRegistry.allUnits)
+            {
+                if (!(u is PilotDismounted d) || d == Controlled || d.disabled || d.NetworkHQ != Controlled.NetworkHQ || !Medical.IsDowned(d)) continue;
+                float dist = Vector3.Distance(d.transform.position, Controlled.transform.position);
+                if (dist > 200f) continue;
+                Vector3 sp = cam.WorldToScreenPoint(d.transform.position + Vector3.up * 0.8f);
+                if (sp.z <= 0f) continue;
+                float y = Screen.height - sp.y;
+                GUI.color = new Color(1f, 0.15f, 0.15f, 0.9f);
+                GUI.DrawTexture(new Rect(sp.x - 2f, y - 8f, 4f, 16f), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(sp.x - 8f, y - 2f, 16f, 4f), Texture2D.whiteTexture);
+                GUI.color = Color.white;
+                GUI.Label(new Rect(sp.x + 10f, y - 10f, 200f, 20f), $"{dist:F0} m");
+            }
+            if (interactTarget != null && !interactTarget.disabled)
+            {
+                float need = Plugin.ReviveTime.Value * (kit == Kit.Medic ? 0.5f : 1f);
+                GUI.Label(new Rect(cx - 150f, cy + 36f, 400f, 24f), $"Hold [{Plugin.InteractKey.Value}] revive {interactTarget.unitName}");
+                if (interactHeld > 0f)
+                {
+                    GUI.color = new Color(0f, 0f, 0f, 0.5f);
+                    GUI.DrawTexture(new Rect(cx - 100f, cy + 60f, 200f, 6f), Texture2D.whiteTexture);
+                    GUI.color = new Color(0.3f, 1f, 0.3f);
+                    GUI.DrawTexture(new Rect(cx - 100f, cy + 60f, 200f * Mathf.Clamp01(interactHeld / need), 6f), Texture2D.whiteTexture);
+                    GUI.color = Color.white;
+                }
+            }
+        }
+
+        private void DrawRally()
+        {
+            if (!GroundWar.LocalRally.HasValue) return;
+            Camera cam = SceneSingleton<CameraStateManager>.i.mainCamera;
+            Vector3 at = GroundWar.LocalRally.Value.ToLocalPosition();
+            Vector3 sp = cam.WorldToScreenPoint(at + Vector3.up * 2f);
+            if (sp.z <= 0f) return;
+            float y = Screen.height - sp.y;
+            GUI.color = new Color(0.3f, 0.8f, 1f, 0.9f);
+            GUI.DrawTexture(new Rect(sp.x - 5f, y - 5f, 10f, 10f), Texture2D.whiteTexture);
+            GUI.Label(new Rect(sp.x + 8f, y - 10f, 200f, 20f), $"RALLY {Vector3.Distance(at, Controlled.transform.position):F0} m");
+            GUI.color = Color.white;
         }
 
         // Capture status while inside an airbase's capture radius.
@@ -792,6 +919,12 @@ namespace NOInfantry
             GUI.color = hp < 35f ? new Color(1f, 0.35f, 0.3f) : Color.white;
             GUI.Label(new Rect(20f, Screen.height - 108f, 200f, 24f), $"HEALTH  {Mathf.Max(hp, 0f):F0}");
 
+            DrawMedical(cx, cy);
+            if (Downed)
+            {
+                GUI.color = prev;
+                return;
+            }
             if (VehicleControl.Driven != null)
             {
                 DrawVehicleHud(cx, cy);
@@ -807,6 +940,7 @@ namespace NOInfantry
             }
             DrawZone(cx);
             DrawMenu(cy);
+            DrawRally();
             float promptY = cy + 60f;
             if (nearbyVehicle != null)
             {
@@ -850,12 +984,13 @@ namespace NOInfantry
             string help = weapon == Weapon.Launcher ? "RMB lock   LMB fire" : "RMB aim   R reload";
             int team = AiSquads.AliveFollowing(Controlled);
             if (team > 0) GUI.Label(new Rect(20f, Screen.height - 156f, 400f, 24f), $"FIRETEAM  {team}   [{Plugin.SquadMenuKey.Value}] orders");
-            if (kit.HasValue) GUI.Label(new Rect(20f, Screen.height - 180f, 300f, 24f), GroundWar.KitName(kit.Value).ToUpperInvariant());
+            if (kit.HasValue) GUI.Label(new Rect(20f, Screen.height - 180f, 400f, 24f), GroundWar.KitName(kit.Value).ToUpperInvariant()
+                + (kit == Kit.Medic ? $"   BANDAGES {bandages}  [{Plugin.InteractKey.Value}] heal" : ""));
             if (CurrentStance != Stance.Stand)
             {
                 GUI.Label(new Rect(20f, Screen.height - 132f, 200f, 24f), CurrentStance == Stance.Crouch ? "CROUCHED" : "PRONE");
             }
-            GUI.Label(new Rect(20f, Screen.height - 60f, 700f, 24f), $"INFANTRY  {help}   G grenade   [{Plugin.CrouchKey.Value}] crouch  [{Plugin.ProneKey.Value}] prone   [{Plugin.FireteamKey.Value}] fireteam   [{Plugin.ToggleKey.Value}] exit");
+            GUI.Label(new Rect(20f, Screen.height - 60f, 700f, 24f), $"INFANTRY  {help}   G grenade   [{Plugin.CrouchKey.Value}] crouch  [{Plugin.ProneKey.Value}] prone   [{Plugin.FireteamKey.Value}] fireteam   [{Plugin.RallyKey.Value}] rally   [{Plugin.ToggleKey.Value}] exit");
             GUI.color = prev;
         }
     }

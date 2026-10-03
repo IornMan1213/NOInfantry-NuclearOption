@@ -7,17 +7,19 @@ namespace NOInfantry
     internal static class SoldierMotor
     {
         internal const float HoverHeight = 1.3f;
+        internal const float DownedHover = 0.45f, DownedPitch = 75f;
 
         // wishVelocity: desired horizontal velocity in world space (m/s). Returns true when on the ground.
-        internal static bool Step(PilotDismounted pilot, float yaw, Vector3 wishVelocity, bool jump)
+        internal static bool Step(PilotDismounted pilot, float yaw, Vector3 wishVelocity, bool jump, bool downed = false)
         {
+            float hover = downed ? DownedHover : HoverHeight;
             Rigidbody rb = pilot.rb;
             Vector3 pos = pilot.transform.position;
             bool inWater = pos.GlobalY() < 0f;
 
             rb.drag = 0f;
             rb.angularVelocity = Vector3.zero;
-            rb.MoveRotation(Quaternion.Euler(0f, yaw, 0f));
+            rb.MoveRotation(Quaternion.Euler(downed ? DownedPitch : 0f, yaw, 0f)); // downed: slumped forward, low
 
             Vector3 groundVel = Vector3.zero;
             bool grounded = Physics.Linecast(pos, pos - Vector3.up * (HoverHeight + 0.4f), out RaycastHit hit, ~(int)PhysicsLayers.ExclusionZonesMask)
@@ -40,7 +42,7 @@ namespace NOInfantry
             {
                 // Spring to hover height plus strong horizontal control.
                 float relVy = vel.y - groundVel.y;
-                rb.AddForce(Vector3.up * (HoverHeight - hit.distance - relVy * 0.2f) * rb.mass * 25f - Vector3.up * relVy * rb.mass * 2f);
+                rb.AddForce(Vector3.up * (hover - hit.distance - relVy * 0.2f) * rb.mass * 25f - Vector3.up * relVy * rb.mass * 2f);
                 rb.AddForce(-horiz * rb.mass * 12f);
                 if (jump)
                 {

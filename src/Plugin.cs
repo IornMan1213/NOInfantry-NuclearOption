@@ -65,6 +65,24 @@ namespace NOInfantry
         internal static ConfigEntry<float> MotorPoolCostScale;
         internal static ConfigEntry<float> MotorPoolCooldown;
         internal static ConfigEntry<int> LastKit;
+        internal static ConfigEntry<KeyCode> RallyKey;
+        internal static ConfigEntry<bool> TruckTransport;
+        internal static ConfigEntry<string> TransportVehicle;
+        internal static ConfigEntry<float> ConvoyDistance;
+        internal static ConfigEntry<float> DismountDistance;
+        internal static ConfigEntry<float> RallyCooldown;
+        internal static ConfigEntry<float> RallyEnemyRadius;
+        internal static ConfigEntry<float> RallyOverrunRadius;
+
+        // Medical
+        internal static ConfigEntry<bool> ReviveEnabled;
+        internal static ConfigEntry<float> BleedOutTime;
+        internal static ConfigEntry<float> ReviveTime;
+        internal static ConfigEntry<float> ReviveHealth;
+        internal static ConfigEntry<float> OverkillDamage;
+        internal static ConfigEntry<float> BandageHeal;
+        internal static ConfigEntry<int> Bandages;
+        internal static ConfigEntry<KeyCode> InteractKey;
 
         // Launcher
         internal static ConfigEntry<int> LauncherAmmo;
@@ -174,7 +192,25 @@ namespace NOInfantry
             MotorPoolMaxMass = Config.Bind("Ground War", "MotorPoolMaxMass", 40000f, "Heaviest vehicle (kg) the motor pool offers");
             MotorPoolCostScale = Config.Bind("Ground War", "MotorPoolCostScale", 0.5f, "Vehicle cost as a fraction of its unit value, paid from your funds (0 = free)");
             MotorPoolCooldown = Config.Bind("Ground War", "MotorPoolCooldown", 45f, "Seconds between vehicles per player");
-            LastKit = Config.Bind("Ground War", "LastKit", 0, "Last kit chosen (0 Rifleman, 1 Anti-Tank, 2 Anti-Air)");
+            LastKit = Config.Bind("Ground War", "LastKit", 0, "Last kit chosen (0 Rifleman, 1 Anti-Tank, 2 Anti-Air, 3 Medic)");
+
+            TruckTransport = Config.Bind("Ground War", "TruckTransport", true, "AI front-line squads ride a truck toward the objective and dismount short of it (else they appear on foot nearby)");
+            TransportVehicle = Config.Bind("Ground War", "TransportVehicle", "", "Vehicle name for troop trucks (empty = MSV MRAP or another stock troop carrier)");
+            ConvoyDistance = Config.Bind("Ground War", "ConvoyStartDistance", 4000f, "How far from the objective the trucks start (on their own side)");
+            DismountDistance = Config.Bind("Ground War", "DismountDistance", 500f, "Squads leave the truck this far from the objective's centre (or on contact)");
+            RallyKey = Config.Bind("Ground War", "RallyKey", KeyCode.Y, "Place your rally point where you stand (a forward spawn for you)");
+            RallyCooldown = Config.Bind("Ground War", "RallyCooldown", 90f, "Seconds between placing rally points");
+            RallyEnemyRadius = Config.Bind("Ground War", "RallyEnemyRadius", 150f, "No enemy soldiers or vehicles this close when placing one");
+            RallyOverrunRadius = Config.Bind("Ground War", "RallyOverrunRadius", 40f, "Enemies this close destroy your rally point");
+
+            ReviveEnabled = Config.Bind("Medical", "Enabled", true, "Lethal hits on soldiers on foot (players and AI) put them down to bleed out instead; friends can revive them");
+            BleedOutTime = Config.Bind("Medical", "BleedOutTime", 45f, "Seconds a downed soldier lasts without help");
+            ReviveTime = Config.Bind("Medical", "ReviveTime", 6f, "Seconds holding the interact key to revive (medics take half)");
+            ReviveHealth = Config.Bind("Medical", "ReviveHealth", 30f, "Health after a revive (medics give double)");
+            OverkillDamage = Config.Bind("Medical", "OverkillDamage", 120f, "Damage beyond what kills you at which there is no going down, you just die (big explosions)");
+            BandageHeal = Config.Bind("Medical", "BandageHeal", 40f, "Health a medic's bandage restores");
+            Bandages = Config.Bind("Medical", "Bandages", 6, "Bandages a medic carries");
+            InteractKey = Config.Bind("Medical", "InteractKey", KeyCode.F, "Hold to revive a downed friend; medics: tap to bandage a friend in front of you (or yourself)");
 
             LauncherAmmo = Config.Bind("Launcher", "Rockets", 4, "Missiles carried (2 to select the launcher)");
             LauncherReload = Config.Bind("Launcher", "Reload", 4f, "Seconds between launches");

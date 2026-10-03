@@ -39,6 +39,10 @@ namespace NOInfantry
             {
                 SpawnPatrolAgainst(soldier);
             }
+            else if (kind == SquadKinds.Rally)
+            {
+                GroundWar.ServerPlaceRally(soldier);
+            }
             else if (kind >= SquadKinds.VehicleBase && kind < SquadKinds.VehicleBase + 9)
             {
                 GroundWar.ServerVehicle(soldier, kind - SquadKinds.VehicleBase);

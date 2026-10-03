@@ -29,6 +29,12 @@ namespace NOInfantry
     public struct NoiDeploy { public byte Kit; public GlobalPosition Pos; }
     // Client -> server: order my AI fireteam (AiOrder), optionally disbanding it.
     public struct NoiOrder { public uint Pilot; public byte Order; public bool Disband; public GlobalPosition Pos; }
+    // Server -> clients: a soldier went down (Seconds to bleed out) or is no longer down.
+    // Server -> owner: rally point placed (Pos) or refused/removed (Reason).
+    public struct NoiRally { public bool Placed; public GlobalPosition Pos; public string Reason; }
+    public struct NoiDowned { public uint Pilot; public bool Down; public float Seconds; }
+    // Client -> server: revive / heal Target, or give up (Medical.Kind*).
+    public struct NoiRevive { public uint Pilot; public uint Target; public byte Kind; }
 
     // Multiplayer for NO Infantry. Every player needs the mod; the server must have it for clients to use it.
     //
@@ -61,7 +67,8 @@ namespace NOInfantry
         {
             internal PilotDismounted Pilot;
             internal INetworkPlayer Owner;
-            internal Vector3 Pos;
+            private GlobalPosition pos; // global: survives floating-origin shifts between state packets
+            internal Vector3 Pos { get => pos.ToLocalPosition(); set => pos = value.ToGlobalPosition(); }
             internal float Yaw;
             internal Vector3 Vel;
             internal float LastShot;
@@ -92,6 +99,7 @@ namespace NOInfantry
         {
             if (p == null) return false;
             if (p == InfantryController.Controlled) return VehicleControl.Driven != null;
+            if (AiSquads.All.TryGetValue(p, out AiSoldier ai)) return ai.Riding != null;
             return Remote.TryGetValue(p, out RemoteSoldier rs) && rs.Driver != null && rs.Driver.Driven != null;
         }
 
@@ -184,7 +192,13 @@ namespace NOInfantry
             Reader<NoiOrder>.Read = r => new NoiOrder { Pilot = r.ReadUInt32(), Order = r.ReadByte(), Disband = r.ReadBoolean(), Pos = r.Read<GlobalPosition>() };
 
             Register<NoiReturn>(); Register<NoiFx>(); Register<NoiTurretAim>(); Register<NoiTest>(); Register<NoiSquad>(); Register<NoiCorrect>();
-            Register<NoiDeploy>(); Register<NoiOrder>();
+            Writer<NoiDowned>.Write = (w, m) => { w.WriteUInt32(m.Pilot); w.WriteBoolean(m.Down); w.Write(m.Seconds); };
+            Reader<NoiDowned>.Read = r => new NoiDowned { Pilot = r.ReadUInt32(), Down = r.ReadBoolean(), Seconds = r.Read<float>() };
+            Writer<NoiRevive>.Write = (w, m) => { w.WriteUInt32(m.Pilot); w.WriteUInt32(m.Target); w.WriteByte(m.Kind); };
+            Reader<NoiRevive>.Read = r => new NoiRevive { Pilot = r.ReadUInt32(), Target = r.ReadUInt32(), Kind = r.ReadByte() };
+            Writer<NoiRally>.Write = (w, m) => { w.WriteBoolean(m.Placed); w.Write(m.Pos); w.Write(m.Reason); };
+            Reader<NoiRally>.Read = r => new NoiRally { Placed = r.ReadBoolean(), Pos = r.Read<GlobalPosition>(), Reason = r.Read<string>() };
+            Register<NoiDeploy>(); Register<NoiOrder>(); Register<NoiDowned>(); Register<NoiRevive>(); Register<NoiRally>();
         }
 
         private static void Register<T>()
@@ -220,7 +234,10 @@ namespace NOInfantry
                 serverHandler.RegisterHandler<NoiSquad>(OnSquad, false);
                 serverHandler.RegisterHandler<NoiDeploy>(OnDeploy, false);
                 serverHandler.RegisterHandler<NoiOrder>(OnOrder, false);
+                serverHandler.RegisterHandler<NoiRevive>(OnRevive, false);
                 GroundWar.ResetMission();
+                Medical.ResetMission();
+                Transport.ResetMission();
                 if (AutoTest.Requested) serverHandler.RegisterHandler<NoiTest>((pl, m) => TestRequest?.Invoke(pl, m), false);
                 Plugin.Log.LogInfo("Multiplayer: server handlers registered");
             }
@@ -238,6 +255,10 @@ namespace NOInfantry
                 clientHandler.RegisterHandler<NoiTurretAim>(OnTurretAim, false);
                 clientHandler.RegisterHandler<NoiVehicle>(OnVehicleReject, false);
                 clientHandler.RegisterHandler<NoiCorrect>(OnCorrect, false);
+                clientHandler.RegisterHandler<NoiDowned>(OnDowned, false);
+                clientHandler.RegisterHandler<NoiRally>(OnRally, false);
+                GroundWar.LocalRally = null;
+                Medical.DownedIds.Clear();
                 Plugin.Log.LogInfo("Multiplayer: client handlers registered");
             }
             if (client == null || !client.Active) clientHandler = null;
@@ -256,6 +277,7 @@ namespace NOInfantry
                 AiSquads.Tick();
                 SquadCommands.AutoPatrols();
                 GroundWar.CaptureTick();
+                Medical.Tick();
                 GroundWar.WarfareTick();
             }
             else ExpireVisualDrivers();
@@ -263,7 +285,7 @@ namespace NOInfantry
 
         // ================= client -> server sends =================
 
-        private static uint NetIdOf(Component c) => c != null && c.TryGetComponent(out NetworkIdentity id) ? id.NetId : 0u;
+        internal static uint NetIdOf(Component c) => c != null && c.TryGetComponent(out NetworkIdentity id) ? id.NetId : 0u;
 
         private static void SendToServer<T>(T msg, Channel channel = Channel.Reliable)
         {
@@ -305,7 +327,42 @@ namespace NOInfantry
 
         internal static void SendSquad(PilotDismounted p, byte kind) => SendToServer(new NoiSquad { Pilot = NetIdOf(p), Kind = kind });
 
-        internal static void SendDeploy(Vector3 near, Kit kit) => SendToServer(new NoiDeploy { Kit = (byte)kit, Pos = near.ToGlobalPosition() });
+        internal static void SendRevive(PilotDismounted p, PilotDismounted target, byte kind) =>
+            SendToServer(new NoiRevive { Pilot = NetIdOf(p), Target = NetIdOf(target), Kind = kind });
+
+        internal static void BroadcastDowned(PilotDismounted p, bool down, float seconds)
+        {
+            if (Combat.IsServer && moddedPlayers.Count > 0) Broadcast(new NoiDowned { Pilot = NetIdOf(p), Down = down, Seconds = seconds }, except: null);
+        }
+
+        // Kit byte: low bits the kit, 0x80 = at my rally point.
+        internal static void SendDeploy(Vector3 near, Kit kit, bool atRally) =>
+            SendToServer(new NoiDeploy { Kit = (byte)((byte)kit | (atRally ? 0x80 : 0)), Pos = near.ToGlobalPosition() });
+
+        // Server -> the player's own game (the host's own player directly).
+        internal static void SendRallyTo(Player player, Vector3 at, bool placed, string reason)
+        {
+            if (player == null) return;
+            if (GameManager.IsLocalPlayer(player))
+            {
+                ApplyRally(placed, at.ToGlobalPosition(), reason);
+                return;
+            }
+            INetworkPlayer owner = player.Owner;
+            if (owner != null && moddedPlayers.Contains(owner) && owner.IsConnected)
+                owner.Send(new NoiRally { Placed = placed, Pos = at.ToGlobalPosition(), Reason = reason ?? "" });
+        }
+
+        private static void OnRally(INetworkPlayer _, NoiRally msg) => ApplyRally(msg.Placed, msg.Pos, msg.Reason);
+
+        internal static event System.Action<string> RallyNotice;
+
+        private static void ApplyRally(bool placed, GlobalPosition pos, string reason)
+        {
+            if (placed) GroundWar.LocalRally = pos;
+            else if (reason != null && reason.StartsWith("overrun")) GroundWar.LocalRally = null;
+            RallyNotice?.Invoke(placed ? "Rally point placed" : $"Rally point: {reason}");
+        }
 
         internal static void SendOrder(PilotDismounted p, AiOrder order, Vector3 pos, bool disband) =>
             SendToServer(new NoiOrder { Pilot = NetIdOf(p), Order = (byte)order, Disband = disband, Pos = pos.ToGlobalPosition() });
@@ -395,7 +452,7 @@ namespace NOInfantry
                 rb.velocity = rs.Vel + err * 10f;
             }
             rb.angularVelocity = Vector3.zero;
-            rb.MoveRotation(Quaternion.Euler(0f, rs.Yaw, 0f));
+            rb.MoveRotation(Quaternion.Euler(Medical.IsDowned(p) ? SoldierMotor.DownedPitch : 0f, rs.Yaw, 0f));
             if (p.animationState != PilotDismounted.PilotState.landing) p.SetPilotState(PilotDismounted.PilotState.landing);
         }
 
@@ -405,6 +462,7 @@ namespace NOInfantry
         private static void OnShot(INetworkPlayer sender, NoiShot msg)
         {
             if (!TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
+            if (Medical.IsDowned(pilot)) return; // down: can't fight
             RemoteSoldier rs = GetOrAddRemote(pilot, sender);
             if (Time.time < rs.LastShot + Plugin.FireInterval.Value * 0.7f) return; // fire-rate check
             rs.LastShot = Time.time;
@@ -431,6 +489,7 @@ namespace NOInfantry
         private static void OnGrenade(INetworkPlayer sender, NoiGrenade msg)
         {
             if (!TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
+            if (Medical.IsDowned(pilot)) return; // down: can't fight
             RemoteSoldier rs = GetOrAddRemote(pilot, sender);
             if (Time.time < rs.LastGrenade + 0.8f) return;
             rs.LastGrenade = Time.time;
@@ -445,6 +504,7 @@ namespace NOInfantry
         private static void OnLaunch(INetworkPlayer sender, NoiLaunch msg)
         {
             if (!TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
+            if (Medical.IsDowned(pilot)) return; // down: can't fight
             RemoteSoldier rs = GetOrAddRemote(pilot, sender);
             if (Time.time < rs.LastLaunch + Plugin.LauncherReload.Value * 0.7f) return;
             if (!NetworkManagerNuclearOption.i.Server.World.TryGetIdentity(msg.Target, out NetworkIdentity tid)) return;
@@ -518,7 +578,7 @@ namespace NOInfantry
 
         private static void OnSquad(INetworkPlayer sender, NoiSquad msg)
         {
-            bool vehicle = msg.Kind >= SquadKinds.VehicleBase; // the motor pool isn't an AI request
+            bool vehicle = msg.Kind >= SquadKinds.VehicleBase || msg.Kind == SquadKinds.Rally; // motor pool / rally aren't AI requests
             if (!vehicle && !Plugin.AllowClientSquads.Value || !TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
             SquadCommands.Execute(pilot, msg.Kind);
         }
@@ -527,8 +587,26 @@ namespace NOInfantry
         {
             if (!moddedPlayers.Contains(sender) || sender.Identity == null) return;
             Player player = sender.Identity.GetComponent<Player>();
-            if (player == null || msg.Kit > (byte)Kit.AntiAir) return;
-            GroundWar.ServerDeploy(player, msg.Pos.ToLocalPosition(), (Kit)msg.Kit);
+            byte kit = (byte)(msg.Kit & 0x7f);
+            if (player == null || kit > (byte)Kit.Medic) return;
+            GroundWar.ServerDeploy(player, msg.Pos.ToLocalPosition(), (Kit)kit, atRally: (msg.Kit & 0x80) != 0);
+        }
+
+        private static void OnRevive(INetworkPlayer sender, NoiRevive msg)
+        {
+            if (!TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
+            PilotDismounted target = msg.Target != 0 && NetworkManagerNuclearOption.i.Server.World.TryGetIdentity(msg.Target, out NetworkIdentity tid)
+                ? tid.GetComponent<PilotDismounted>() : null;
+            bool medic = GroundWar.Kits.TryGetValue(pilot, out Kit kit) && kit == Kit.Medic;
+            if (msg.Kind == Medical.KindRevive) Medical.Revive(pilot, target, medic);
+            else if (msg.Kind == Medical.KindHeal && medic) Medical.Heal(pilot, target);
+            else if (msg.Kind == Medical.KindGiveUp && Medical.Downed.ContainsKey(pilot)) Medical.BleedOut(pilot);
+        }
+
+        private static void OnDowned(INetworkPlayer _, NoiDowned msg)
+        {
+            if (msg.Down) Medical.DownedIds[msg.Pilot] = Time.time + msg.Seconds;
+            else Medical.DownedIds.Remove(msg.Pilot);
         }
 
         private static void OnOrder(INetworkPlayer sender, NoiOrder msg)
