@@ -19,6 +19,8 @@ namespace NOInfantry
     public struct NoiReturn { public uint Pilot; }
     public struct NoiFx { public byte Kind; public GlobalPosition A; public Vector3 B; }
     public struct NoiTurretAim { public uint Vehicle; public GlobalPosition Aim; public bool Active; }
+    // Automated multiplayer test only: a client asks the host to spawn a test unit (ignored unless the host runs -noiAutotest).
+    public struct NoiTest { public byte Kind; public string Name; public GlobalPosition Pos; public Vector3 Dir; }
 
     // Multiplayer for NO Infantry. Every player needs the mod; the server must have it for clients to use it.
     //
@@ -34,6 +36,11 @@ namespace NOInfantry
         internal const int ProtocolVersion = 1;
 
         internal static bool ServerHasMod => Combat.IsServer || serverAcked;
+        internal static int ModdedPlayerCount => moddedPlayers.Count;
+        internal static Action<INetworkPlayer, NoiTest> TestRequest;
+
+        // Server-side counters, reported by the multiplayer test.
+        internal static int StatShots, StatShotHits, StatGrenades, StatLaunches, StatVehicleEnters, StatVehicleInputs;
 
         private static bool serverAcked;
         private static bool helloSent;
@@ -84,6 +91,24 @@ namespace NOInfantry
             foreach (PilotDismounted p in Remote.Keys) if (p != null) yield return p;
         }
 
+        // Server: a soldier whose owner runs the mod. Protected from capture / airbase return even before the
+        // owner takes control (the landed state reaches the client after the game's 3 s capture check).
+        internal static bool OwnedByModdedPlayer(PilotDismounted p) =>
+            p != null && Combat.IsServer && p.Networkplayer != null && p.Networkplayer.Owner != null
+            && moddedPlayers.Contains(p.Networkplayer.Owner);
+
+        internal static bool IsProtected(PilotDismounted p) => IsControlled(p) || OwnedByModdedPlayer(p);
+
+        internal static IEnumerable<PilotDismounted> AllProtected()
+        {
+            foreach (PilotDismounted p in AllControlled()) yield return p;
+            if (moddedPlayers.Count == 0) yield break;
+            foreach (Unit u in UnitRegistry.allUnits)
+            {
+                if (u is PilotDismounted p && !p.disabled && OwnedByModdedPlayer(p) && !IsControlled(p)) yield return p;
+            }
+        }
+
         // ================= registration =================
 
         internal static void RegisterSerializers()
@@ -129,7 +154,10 @@ namespace NOInfantry
 
             Register<NoiHello>(); Register<NoiHelloAck>(); Register<NoiSoldierState>(); Register<NoiShot>();
             Register<NoiGrenade>(); Register<NoiLaunch>(); Register<NoiVehicle>(); Register<NoiVehicleInput>();
-            Register<NoiReturn>(); Register<NoiFx>(); Register<NoiTurretAim>();
+            Writer<NoiTest>.Write = (w, m) => { w.WriteByte(m.Kind); w.Write(m.Name); w.Write(m.Pos); w.Write(m.Dir); };
+            Reader<NoiTest>.Read = r => new NoiTest { Kind = r.ReadByte(), Name = r.Read<string>(), Pos = r.Read<GlobalPosition>(), Dir = r.Read<Vector3>() };
+
+            Register<NoiReturn>(); Register<NoiFx>(); Register<NoiTurretAim>(); Register<NoiTest>();
         }
 
         private static void Register<T>()
@@ -162,6 +190,7 @@ namespace NOInfantry
                 serverHandler.RegisterHandler<NoiVehicle>(OnVehicle, false);
                 serverHandler.RegisterHandler<NoiVehicleInput>(OnVehicleInput, false);
                 serverHandler.RegisterHandler<NoiReturn>(OnReturn, false);
+                if (AutoTest.Requested) serverHandler.RegisterHandler<NoiTest>((pl, m) => TestRequest?.Invoke(pl, m), false);
                 Plugin.Log.LogInfo("Multiplayer: server handlers registered");
             }
             if (server == null || !server.Active) serverHandler = null;
@@ -234,6 +263,9 @@ namespace NOInfantry
         }
 
         internal static void SendReturn(PilotDismounted p) => SendToServer(new NoiReturn { Pilot = NetIdOf(p) });
+
+        internal static void SendTest(byte kind, string name, Vector3 pos, Vector3 dir) =>
+            SendToServer(new NoiTest { Kind = kind, Name = name, Pos = pos.ToGlobalPosition(), Dir = dir });
 
         // ================= server handlers =================
 
@@ -319,13 +351,18 @@ namespace NOInfantry
             rs.LastShot = Time.time;
             Vector3 origin = msg.Origin.ToLocalPosition();
             Vector3 dir = msg.Dir.normalized;
+            if (StatShots % 10 == 0)
+            {
+                Plugin.Log.LogInfo($"[net] shot origin is {Vector3.Distance(origin, pilot.transform.position):F1} m from the server copy of {pilot.UniqueName}");
+            }
             if (!OriginPlausible(pilot, origin) || dir == Vector3.zero) return;
 
             Vector3 end = origin + dir * Plugin.Range.Value;
+            StatShots++;
             if (Combat.Raycast(origin, dir, pilot, out RaycastHit hit))
             {
                 end = hit.point;
-                Combat.ApplyRifleDamage(pilot, hit, dir);
+                if (Combat.ApplyRifleDamage(pilot, hit, dir) != null) StatShotHits++;
                 if (!GameManager.IsHeadless) Combat.PlayImpact(hit, dir);
             }
             if (!GameManager.IsHeadless) Tracer.Spawn(origin + dir * 1.2f, end);
@@ -342,6 +379,7 @@ namespace NOInfantry
             if (!OriginPlausible(pilot, origin)) return;
             Vector3 vel = Vector3.ClampMagnitude(msg.Vel, Plugin.GrenadeThrowSpeed.Value + 60f);
             Grenade.Throw(pilot, origin, vel, authoritative: true);
+            StatGrenades++;
             Broadcast(new NoiFx { Kind = 2, A = msg.Origin, B = vel }, except: sender);
         }
 
@@ -353,10 +391,15 @@ namespace NOInfantry
             if (!NetworkManagerNuclearOption.i.Server.World.TryGetIdentity(msg.Target, out NetworkIdentity tid)) return;
             Unit target = tid.GetComponent<Unit>();
             if (target == null || target.disabled) return;
-            Vector3 pos = msg.Pos.ToLocalPosition();
-            if (!OriginPlausible(pilot, pos)) return;
+            Vector3 clientPos = msg.Pos.ToLocalPosition();
+            if (!OriginPlausible(pilot, clientPos)) return;
             rs.LastLaunch = Time.time;
-            Launcher.SpawnFor(pilot, target, pos, msg.Dir.normalized);
+            // Launch from the server's copy of the soldier, well clear of its collider: the client's own launch
+            // point can sit inside the (slightly lagging) server copy, and the missile then detonates on the
+            // soldier at once (seen in MP testing).
+            Vector3 dir = msg.Dir.normalized;
+            Vector3 pos = pilot.transform.position + Vector3.up * Plugin.EyeHeight.Value + dir * 3f;
+            if (Launcher.SpawnFor(pilot, target, pos, dir) != null) StatLaunches++;
             rs.SpotTarget = target;
             rs.SpotUntil = Time.time + 30f;
         }
@@ -384,6 +427,7 @@ namespace NOInfantry
             ServerLeaveVehicle(rs);
             rs.Driver = new VehicleDriver();
             rs.Driver.Enter(unit, pilot.transform.position, authority: true);
+            StatVehicleEnters++;
             pilot.SetCollidable(false);
         }
 
@@ -402,6 +446,7 @@ namespace NOInfantry
         {
             if (!TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
             if (!Remote.TryGetValue(pilot, out RemoteSoldier rs) || rs.Driver == null) return;
+            StatVehicleInputs++;
             rs.Driver.Throttle = Mathf.Clamp(msg.Throttle, -1f, 1f);
             rs.Driver.Steering = Mathf.Clamp(msg.Steering, -1f, 1f);
             rs.Driver.AimPoint = msg.Aim.ToLocalPosition();

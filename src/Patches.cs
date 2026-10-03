@@ -30,7 +30,7 @@ namespace NOInfantry
         [HarmonyPrefix]
         private static bool CapturePrefix(PilotDismounted __instance)
         {
-            return !NetSync.IsControlled(__instance);
+            return !NetSync.IsProtected(__instance);
         }
 
         // Pilots have a zero-value unit definition, so AI never engages them. Give only the player-controlled
@@ -52,6 +52,32 @@ namespace NOInfantry
             __result = new OpportunityThreat(Plugin.AiInfantryPriority.Value * (1f - targetDistance / range), __result.threat);
         }
 
+        // Diagnostics: why a player's soldier died (impact check vs damage).
+        [HarmonyPatch(typeof(PilotDismounted), "KillPilot")]
+        [HarmonyPrefix]
+        private static bool KillPilotPrefix(PilotDismounted __instance)
+        {
+            if (!NetSync.IsProtected(__instance)) return true;
+            // The impact check compares velocity between physics steps; the first steps after a network spawn on
+            // the ground can jump and kill a player's soldier before they ever control it (seen in MP testing).
+            if (__instance.timeSinceSpawn < 5f)
+            {
+                Plugin.Log.LogInfo($"Ignored spawn-time impact check on {__instance.UniqueName}");
+                return false;
+            }
+            Plugin.Log.LogWarning($"Soldier {__instance.UniqueName} killed by impact: velocity {__instance.rb.velocity.magnitude:F1} m/s");
+            return true;
+        }
+
+        [HarmonyPatch(typeof(PilotDismounted), nameof(PilotDismounted.TakeDamage))]
+        [HarmonyPrefix]
+        private static void PilotTakeDamagePrefix(PilotDismounted __instance, float pierceDamage, float blastDamage, float fireDamage, float collisionDamage, PersistentID dealerID)
+        {
+            if (!NetSync.IsProtected(__instance)) return;
+            UnitRegistry.TryGetUnit(dealerID, out Unit dealer);
+            Plugin.Log.LogInfo($"Soldier {__instance.UniqueName} hit: pierce {pierceDamage:F0} blast {blastDamage:F0} fire {fireDamage:F0} collision {collisionDamage:F0} by {dealer?.unitName ?? "?"}");
+        }
+
         // Diagnostics for launcher missiles: log how and where they end.
         [HarmonyPatch(typeof(Missile), nameof(Missile.Detonate))]
         [HarmonyPrefix]
@@ -71,7 +97,7 @@ namespace NOInfantry
         {
             if (AirbaseServices.BypassAirbasePatch) return true;
             bool isSoldier = false;
-            foreach (PilotDismounted p in NetSync.AllControlled())
+            foreach (PilotDismounted p in NetSync.AllProtected())
             {
                 if ((fromPosition - p.transform.position).sqrMagnitude <= 1f) { isSoldier = true; break; }
             }

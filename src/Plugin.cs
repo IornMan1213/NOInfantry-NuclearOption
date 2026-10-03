@@ -150,7 +150,8 @@ namespace NOInfantry
             if (AutoTest.Requested)
             {
                 Log.LogWarning("-noiAutotest given: running the automated in-game test, the game will quit when done");
-                host.AddComponent<AutoTest>();
+                if (AutoTestMp.Role != null) host.AddComponent<AutoTestMp>();
+                else host.AddComponent<AutoTest>();
             }
 
             Log.LogInfo($"{Name} {Version} loaded");

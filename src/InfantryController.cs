@@ -96,7 +96,7 @@ namespace NOInfantry
             }
 
             if (Controlled == null && pilot != null && Plugin.AutoEnter.Value && pilot != userExitedPilot
-                && pilot.animationState == PilotDismounted.PilotState.landing && CanControl(pilot))
+                && OnTheGround(pilot) && CanControl(pilot))
             {
                 Enter(pilot);
             }
@@ -142,10 +142,33 @@ namespace NOInfantry
                 && followed.Networkplayer != null && GameManager.IsLocalPlayer(followed.Networkplayer))
             {
                 cachedPilot = followed;
+                return;
+            }
+
+            // Last resort (cheap, twice a second): any live soldier owned by us. In multiplayer the owner can
+            // reach a client after the pilot's Setup ran, in which case the game never links Player.PilotDismounted.
+            if (Time.time < nextPilotScan) return;
+            nextPilotScan = Time.time + 0.5f;
+            foreach (Unit u in UnitRegistry.allUnits)
+            {
+                if (u is PilotDismounted p2 && !p2.disabled && p2.Networkplayer != null && GameManager.IsLocalPlayer(p2.Networkplayer))
+                {
+                    cachedPilot = p2;
+                    return;
+                }
             }
         }
 
         private static float nextServerWarning;
+
+        // Landed, or (as seen by a multiplayer client, where the state can lag) out of the seat and at rest.
+        private static bool OnTheGround(PilotDismounted p)
+        {
+            if (p.animationState == PilotDismounted.PilotState.landing) return true;
+            if (p.animationState != PilotDismounted.PilotState.detaching || p.timeSinceSpawn < 3f) return false;
+            return p.rb != null && p.rb.velocity.sqrMagnitude < 4f;
+        }
+        private float nextPilotScan;
 
         private static bool CanControl(PilotDismounted pilot)
         {
