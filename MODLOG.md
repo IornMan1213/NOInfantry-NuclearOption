@@ -187,3 +187,19 @@ We hijack it rather than spawning a new unit type (no prefab/network registratio
   distribution (key `Squads/AimSpread`). Patrol vs fireteam at 220 m resolves in ~25 s.
 - Capture calibration from the game data: trucks 2, MRAP 6, APC 12; airbase defence 10. Soldier = 0.5.
 - Results: SP 39/39; MP client 23/23, host 12/12.
+
+## 2026-10-02 v0.8 (work while the user played) downed/revive, medic, rally points, troop trucks
+- Medical: prefix on `PilotDismounted.TakeDamage` (same formula as the game: (pierce-armor)/tolerance etc.). A lethal,
+  non-overkill hit on a soldier on foot -> 1 HP, `Medical.Downed[p] = bleed-out time`, broadcast NoiDowned. Health
+  changes go through the game's `RpcTakeDamage(amount)`; ApplyDamage does `hitPoints -= amount`, so a negative amount
+  heals on every copy. A dedicated server has no local client to run the RPC, so its copy is set directly.
+- Downed pose: SoldierMotor hover 0.45 m, pitched 75 deg. AI skip downed targets; AnalyzeTarget too.
+- Rally points: one per player (global position), NoiDeploy kit byte bit 0x80 = at rally; NoiRally feedback to the owner.
+- Floating origin (`Datum.AfterOriginShift`): stored local Vector3s go stale. AI order/patrol positions and the
+  server's copy of remote soldiers' positions are now kept as GlobalPosition.
+- Transport: `Spawner.SpawnVehicle(MSV MRAP)` + `GroundVehicle.UnitCommand.SetDestination(drop, false)` uses the
+  game's road/offroad pathfinder. Riders are AI soldiers pinned to seats on the back (collider off) and count as
+  "in a vehicle" for targeting and capture.
+- Build: `-p:NoDeploy=true` builds without copying into the game (the game was not running once, and an untested
+  DLL landed in plugins for ~15 s before it was restored).
+- User's session at 23:36: a mod manager rewrote the plugins folder and the NOInfantry folder was not in it.

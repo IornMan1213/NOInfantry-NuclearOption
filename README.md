@@ -18,14 +18,21 @@ from the airbases you've won.
   - **Rifleman**: rifle, 6 grenades.
   - **Anti-Tank**: rifle, 2 grenades, guided anti-surface rockets.
   - **Anti-Air**: rifle, 2 grenades, heat-seeking anti-air missiles.
+  - **Medic**: rifle, 2 grenades, 6 bandages (**F** heals the friend in front of you, or yourself); revives twice as fast.
 - **Respawn:** when your soldier dies the map opens; click a friendly airbase and deploy again (or fly).
+- **Rally point (Y):** place a forward spawn where you stand (not within 150 m of enemies, every 90 s). The deploy
+  panel then lets you choose Airbase or Rally. Enemies walking onto it destroy it.
+- **Downed, not dead:** a lethal hit puts a soldier on foot (you, other players, AI) down for 45 s instead.
+  Hold **F** next to a downed friend to revive them (6 s, medics 3 s); AI riflemen come and revive you.
+  Downed friends show as red crosses. Hold **Space** while down to give up and redeploy. Big explosions still kill outright.
 - **Capture on foot:** every soldier (yours, your fireteam's, the AI front line's) counts toward capturing
   an airbase while inside its capture radius. A bar at the top of the screen shows the owner and progress.
 - **Fireteam orders (T, then 1-5):** Follow me / Hold here / Move there (where you look) / Free roam
   (they go and take the next airbase) / Disband. If you die, your riflemen carry on by themselves.
 - **AI front line:** every couple of minutes each side sends a squad at the nearest airbase it doesn't
-  hold, and garrisons its own bases when enemy soldiers get in. Squads arrive a short walk outside the
-  objective. Tune or switch off under `Ground War` in the config.
+  hold, and garrisons its own bases when enemy soldiers get in. Squads ride a truck (MSV MRAP) from up to
+  4 km out and dismount 500 m from the objective, on contact, or when the truck is hit (survivors bail out
+  hurt). Tune or switch off under `Ground War` in the config.
 - **Motor pool (V, then 1-9):** at a friendly airbase, request a ground vehicle next to you, paid from your
   funds (cost and cooldown configurable). Then **E** to drive it to the front.
 
@@ -39,6 +46,8 @@ from the airbases you've won.
 | On foot, at a friendly airbase | **B** | open the aircraft selection menu and take off again (or redeploy with another kit) |
 | On foot, at a friendly airbase | **V** | motor pool: pick a vehicle with 1-9 |
 | On foot, with a fireteam | **T** | orders menu: 1 follow, 2 hold, 3 move there, 4 free roam, 5 disband |
+| On foot | **Y** | place your rally point (forward spawn) |
+| Next to a downed friend | hold **F** | revive (medics: tap F to bandage) |
 | Any time on foot | **F7** | switch between first person and the game camera |
 
 ### On foot

@@ -204,6 +204,7 @@ namespace NOInfantry
             Result("server AI squads", AiSquads.Spawned >= Plugin.SquadSize.Value, $"{AiSquads.Spawned} AI soldiers spawned on request");
             Result("server deploy on foot", GroundWar.DeployCount > 0, $"{GroundWar.DeployCount} soldiers deployed from the menu");
             Result("server squad orders", AiSquads.OrdersReceived > 0, $"{AiSquads.OrdersReceived} orders executed");
+            Result("server revive", Medical.Downs > 0 && Medical.Revives > 0, $"{Medical.Downs} downed, {Medical.Revives} revived, {Medical.Bleedouts} bled out");
             yield return Finish();
         }
 
@@ -241,6 +242,14 @@ namespace NOInfantry
                     {
                         ShipDefinition def = Encyclopedia.i.ships.Where(s => s?.unitPrefab != null).OrderBy(s => s.mass).First();
                         spawner.SpawnShip(def.unitPrefab, pos.ToGlobalPosition(), rot, hq, req.Name, 1f, true);
+                        break;
+                    }
+                    case 9: // put the requesting player's soldier down (medical test)
+                    {
+                        PilotDismounted target = UnitRegistry.allUnits.OfType<PilotDismounted>()
+                            .FirstOrDefault(pd => !pd.disabled && pd.Networkplayer != null && pd.Networkplayer.Owner == sender);
+                        target?.TakeDamage(170f, 0f, 0f, 0f, 0f, PersistentID.None);
+                        Log($"downed {target?.unitName} for the client (downed {Medical.IsDowned(target)})");
                         break;
                     }
                     case 5: // an aircraft for the requesting player (tests the hand-off back to flying)
@@ -597,6 +606,16 @@ namespace NOInfantry
                                                            && Vector3.Distance(Flat(pd.transform.position), Flat(holdAt)) < 14f); // rear wedge slots are 9.2 m out
             Result("squad hold order (client)", walked > 12f && holding >= Plugin.SquadSize.Value - 1, $"walked {walked:F0} m, {holding} riflemen holding within 14 m of the hold point");
             Shot("client_hold");
+
+            // Medical over the network: the host puts us down; our riflemen (holding nearby) come and revive us.
+            NetSync.SendTest(9, "down", me.transform.position, Vector3.forward);
+            yield return WaitUntil(() => InfantryController.Instance.Downed, 5f);
+            bool wentDown = InfantryController.Instance.Downed;
+            Result("downed (client)", wentDown && !me.disabled, $"downed {wentDown}, HP {Medical.Health(me):F1}, bleed {Medical.BleedLeft(me):F0} s");
+            Shot("client_downed");
+            yield return WaitUntil(() => me == null || me.disabled || !InfantryController.Instance.Downed, Plugin.ReviveTime.Value + 25f);
+            Result("revived by AI (client)", wentDown && me != null && !me.disabled && !InfantryController.Instance.Downed && Medical.Health(me) > 20f,
+                $"alive {me != null && !me.disabled}, downed {InfantryController.Instance.Downed}, HP {Medical.Health(me):F0}");
         }
 
         private IEnumerator AirStep()
