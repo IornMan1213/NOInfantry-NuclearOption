@@ -11,6 +11,7 @@ namespace NOInfantry
     internal class Launcher
     {
         internal int Ammo;
+        internal bool AllowAir = true, AllowSurface = true; // kit restrictions
         internal static Missile LastLaunched;
         internal static readonly Dictionary<Missile, Unit> Launched = new Dictionary<Missile, Unit>();
         internal Unit LockTarget { get; private set; }
@@ -34,7 +35,7 @@ namespace NOInfantry
         private static string aaName = "-", atName = "-";
         private static bool searched;
 
-        internal string Summary => $"LAUNCHER {Ammo}   AA: {aaName}   AT: {atName}";
+        internal string Summary => $"LAUNCHER {Ammo}" + (AllowAir ? $"   AA: {aaName}" : "") + (AllowSurface ? $"   AT: {atName}" : "");
 
         internal Launcher(GameObject host)
         {
@@ -113,6 +114,8 @@ namespace NOInfantry
             r.shadowCastingMode = ShadowCastingMode.Off;
         }
 
+        internal bool Visible => tube != null && tube.gameObject.activeSelf;
+
         internal void SetVisible(bool visible)
         {
             if (tube != null) tube.gameObject.SetActive(visible);
@@ -140,7 +143,7 @@ namespace NOInfantry
             }
             else
             {
-                Unit candidate = FindTarget(self, cam, LockTarget != null ? Plugin.LockConeDegrees.Value * 1.5f : Plugin.LockConeDegrees.Value);
+                Unit candidate = FindTarget(self, cam, LockTarget != null ? Plugin.LockConeDegrees.Value * 1.5f : Plugin.LockConeDegrees.Value, AllowAir, AllowSurface);
                 if (candidate != LockTarget)
                 {
                     LockTarget = candidate;
@@ -235,7 +238,7 @@ namespace NOInfantry
             return m;
         }
 
-        private static Unit FindTarget(PilotDismounted self, Camera cam, float cone)
+        private static Unit FindTarget(PilotDismounted self, Camera cam, float cone, bool air, bool surface)
         {
             Transform eye = cam.transform;
             Unit best = null;
@@ -244,7 +247,7 @@ namespace NOInfantry
             foreach (Unit u in UnitRegistry.allUnits)
             {
                 if (u == null || u.disabled || u == self || u.NetworkHQ == null || u.NetworkHQ == self.NetworkHQ) continue;
-                if (!(u is Aircraft || u is GroundVehicle || u is Ship)) continue;
+                if (!(u is Aircraft ? air : (u is GroundVehicle || u is Ship) && surface)) continue;
                 Vector3 to = u.transform.position - eye.position;
                 float dist = to.magnitude;
                 if (dist > maxRange || dist < 30f) continue;

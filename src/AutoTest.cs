@@ -76,9 +76,16 @@ namespace NOInfantry
         private IEnumerator Run()
         {
             Log("autotest started");
+            GroundWar.SuspendWarfare = true;
             yield return Step("setup", Setup());
             if (soldier == null)
             {
+                Finish();
+                yield break;
+            }
+            if (Environment.GetCommandLineArgs().Any(x => x.Equals("-noiGroundWarOnly", StringComparison.OrdinalIgnoreCase)))
+            {
+                yield return Step("ground-war", GroundWarTest());
                 Finish();
                 yield break;
             }
@@ -91,6 +98,7 @@ namespace NOInfantry
             yield return Step("ship", ShipTest());
             yield return Step("airbase", AirbaseTest());
             yield return Step("squads", SquadTest());
+            yield return Step("ground-war", GroundWarTest());
             Finish();
         }
 
@@ -592,6 +600,144 @@ namespace NOInfantry
             // A real exchange of fire with casualties on either side (the outcome itself is a fair fight).
             Result("firefight", AiSquads.ShotsFired - shots0 > 0 && AiSquads.HitsLanded - hits0 > 0 && patrolDown + teamDown > 0,
                 $"AI shots {AiSquads.ShotsFired - shots0}, hits {AiSquads.HitsLanded - hits0}, patrol down {patrolDown}/{patrol.Count}, fireteam left {teamLeft}, me alive {me != null && !me.disabled}");
+        }
+
+        private float TeamDistance(List<PilotDismounted> team, Vector3 to) =>
+            team.Where(p => p != null && !p.disabled).Select(p => Vector3.Distance(Flat(p.transform.position), Flat(to))).DefaultIfEmpty(999f).Average();
+
+        private IEnumerator GroundWarTest()
+        {
+            // Calibration data for capture balance and the motor pool.
+            Log($"airbase {GroundWar.AirbaseName(airbase)}: capture defense {airbase.SavedAirbase.CaptureDefense}, range {airbase.SavedAirbase.CaptureRange}");
+            foreach (VehicleDefinition v in Encyclopedia.i.vehicles.Where(v => v != null && v.captureStrength > 0f).Take(12))
+                Log($"  vehicle {v.unitName}: captureStrength {v.captureStrength}, defense {v.captureDefense}, mass {v.mass:F0}, value {v.value}");
+            foreach (VehicleDefinition v in GroundWar.MotorPool) Log($"  motor pool: {v.unitName} mass {v.mass:F0} value {v.value} cost {GroundWar.Cost(v):F2}");
+
+            // A clean battlefield: the previous step's patrol is still hunting around this airbase.
+            Log($"cleared {AiSquads.Despawn(_ => true)} AI soldiers from earlier steps");
+            yield return new WaitForSecondsRealtime(1f);
+
+            // 1. Deploy on foot from the aircraft selection menu, with a kit.
+            PilotDismounted old = InfantryController.Controlled;
+            if (!AirbaseServices.OpenAircraftMenu(airbase)) { Result("deploy menu", false, "could not open the aircraft selection menu"); yield break; }
+            yield return WaitUntil(() => GroundWar.OpenMenu != null, 5f);
+            yield return new WaitForSecondsRealtime(1.5f);
+            Shot("deploy_panel");
+            Airbase menuBase = GroundWar.MenuAirbase(GroundWar.OpenMenu);
+            Result("deploy menu", menuBase == airbase, $"selection menu at {GroundWar.AirbaseName(menuBase)}");
+            bool requested = GroundWar.RequestDeploy(menuBase, Kit.AntiTank);
+            float waitEnd = Time.realtimeSinceStartup + 20f, nextDiag = 0f;
+            while (!(InfantryController.Controlled != null && InfantryController.Controlled != old) && Time.realtimeSinceStartup < waitEnd)
+            {
+                if (Time.realtimeSinceStartup > nextDiag)
+                {
+                    nextDiag = Time.realtimeSinceStartup + 2f;
+                    foreach (PilotDismounted pd in UnitRegistry.allUnits.OfType<PilotDismounted>().Where(x => x.Networkplayer == player))
+                        Log($"  diag {pd.unitName}: {Vector3.Distance(Flat(pd.transform.position), Flat(airbase.center.position)):F0} m from centre, state {pd.animationState}, t {pd.timeSinceSpawn:F1}, vel {pd.rb.velocity.magnitude:F1}, globalY {pd.transform.position.GlobalY():F1}, disabled {pd.disabled}, localSim {pd.LocalSim}, kinematic {pd.rb.isKinematic}");
+                }
+                yield return null;
+            }
+            PilotDismounted me = InfantryController.Controlled;
+            bool deployed = requested && me != null && me != old;
+            float fromBase = me != null ? Vector3.Distance(Flat(me.transform.position), Flat(airbase.center.position)) : -1f;
+            Result("deploy on foot", deployed && InfantryController.Instance.CurrentKit == Kit.AntiTank && fromBase < 600f && old == null && !DynamicMap.mapMaximized,
+                $"controlled {me?.unitName}, kit {InfantryController.Instance.CurrentKit}, {fromBase:F0} m from the airbase centre, old soldier gone {old == null}, map open {DynamicMap.mapMaximized}, menu closed {GroundWar.OpenMenu == null}");
+            if (!deployed) yield break;
+            soldier = me;
+            InputShim.Scripted = true;
+            Launcher l = InfantryController.Instance.ActiveLauncher;
+            Result("kit loadout", l != null && !l.AllowAir && l.AllowSurface && l.Ammo == GroundWar.KitRockets(Kit.AntiTank) && InfantryController.Instance.Grenades == GroundWar.KitGrenades(Kit.AntiTank),
+                $"rockets {l?.Ammo}, AA {l?.AllowAir}, AT {l?.AllowSurface}, grenades {InfantryController.Instance.Grenades}");
+            yield return new WaitForSecondsRealtime(1f);
+            Shot("deployed");
+
+            // 2. Soldiers count toward capture.
+            yield return new WaitForSecondsRealtime(1.5f);
+            Result("capture strength", Mathf.Approximately(me.CaptureStrength, Plugin.SoldierCaptureStrength.Value), $"soldier capture strength {me.CaptureStrength} (config {Plugin.SoldierCaptureStrength.Value})");
+
+            // 3. Fireteam orders: hold, move, follow.
+            Vector3 fwd = ClearDirection(60f);
+            InfantryController.Instance.AimAt(me.transform.position + fwd * 60f + Vector3.up * 1.5f);
+            InputShim.Press(Plugin.FireteamKey.Value);
+            yield return new WaitForSecondsRealtime(4f);
+            List<PilotDismounted> team = AiSquads.All.Values.Where(a => (object)a.Leader == me).Select(a => a.Pilot).ToList();
+            Result("fireteam (deployed)", team.Count == Plugin.SquadSize.Value, $"{team.Count} riflemen");
+            foreach (PilotDismounted r in team) Log($"  {r.UniqueName} {Vector3.Distance(r.transform.position, me.transform.position):F0} m from me; me global {me.transform.position.ToGlobalPosition()}");
+
+            Vector3 holdAt = me.transform.position;
+            InputShim.Press(Plugin.SquadMenuKey.Value);
+            yield return null;
+            yield return null;
+            Shot("orders_menu");
+            InputShim.Press(KeyCode.Alpha2);
+            yield return new WaitForSecondsRealtime(0.5f);
+            bool weaponUnchanged = InfantryController.Instance.ActiveLauncher != null && !InfantryController.Instance.ActiveLauncher.Visible;
+            InputShim.Hold(KeyCode.W, true);
+            yield return new WaitForSecondsRealtime(6f);
+            InputShim.ReleaseAll();
+            yield return new WaitForSecondsRealtime(2f);
+            float leaderMoved = Vector3.Distance(Flat(holdAt), Flat(me.transform.position));
+            float holdDist = TeamDistance(team, holdAt);
+            Result("order hold", leaderMoved > 12f && holdDist < 9f && weaponUnchanged, $"leader walked {leaderMoved:F0} m, team stayed {holdDist:F1} m from the hold point (2 chose the order, not the launcher: {weaponUnchanged})");
+
+            Vector3 movePoint = Ground(me.transform.position + fwd * 45f);
+            InfantryController.Instance.AimAt(movePoint);
+            yield return null;
+            InfantryController.Instance.IssueOrder(3);
+            yield return new WaitForSecondsRealtime(14f);
+            float moveDist = TeamDistance(team, movePoint);
+            Result("order move", moveDist < 12f, $"team {moveDist:F1} m from the ordered point");
+            Shot("order_move");
+
+            InfantryController.Instance.IssueOrder(1);
+            yield return new WaitForSecondsRealtime(12f);
+            float followDist = TeamDistance(team, me.transform.position);
+            Result("order follow", followDist < 15f, $"team {followDist:F1} m from the leader");
+
+            // 4. Motor pool at the airbase (funds topped up so the test doesn't depend on the economy).
+            Vector3 home = Ground(airbase.center.position + airbase.center.forward * 60f) + Vector3.up * 1.5f;
+            me.transform.position = home;
+            me.rb.position = home;
+            me.rb.velocity = Vector3.zero;
+            yield return new WaitForSecondsRealtime(1f);
+            if (GroundWar.MotorPool.Count > 0) player.AddAllocation(GroundWar.Cost(GroundWar.MotorPool[0]) + 10f);
+            float funds0 = player.Allocation;
+            InputShim.Press(Plugin.MotorPoolKey.Value);
+            yield return null;
+            yield return null;
+            Shot("motor_pool");
+            InputShim.Press(KeyCode.Alpha1);
+            yield return new WaitForSecondsRealtime(3f);
+            GroundVehicle issued = UnitRegistry.allUnits.OfType<GroundVehicle>().FirstOrDefault(v => v != null && v.UniqueName != null && v.UniqueName.StartsWith("NOI Motor Pool")
+                                                                                               && Vector3.Distance(v.transform.position, me.transform.position) < 40f);
+            Result("motor pool", issued != null && issued.NetworkHQ == hq, $"{issued?.unitName} at {(issued != null ? Vector3.Distance(issued.transform.position, me.transform.position) : -1f):F0} m, funds {funds0:F1} -> {player.Allocation:F1}");
+            yield return new WaitForSecondsRealtime(1f);
+            Shot("motor_pool_vehicle");
+
+            // 5. The AI front line.
+            int ai0 = AiSquads.All.Count;
+            int waves0 = GroundWar.WavesSent;
+            GroundWar.SuspendWarfare = false;
+            GroundWar.ForceWave();
+            yield return new WaitForSecondsRealtime(2f);
+            GroundWar.SuspendWarfare = true;
+            var objectives = AiSquads.All.Values.Where(a => a.Objective != null && a.Leader == null).GroupBy(a => a.Pilot.NetworkHQ)
+                .Select(g => $"{g.Key.faction.factionName} x{g.Count()} -> {GroundWar.AirbaseName(g.First().Objective)}").ToList();
+            Result("front line", GroundWar.WavesSent > waves0 && AiSquads.All.Count > ai0, $"{GroundWar.WavesSent - waves0} squads sent: {string.Join("; ", objectives)}");
+            List<AiSoldier> movers = AiSquads.All.Values.Where(a => a.Objective != null && a.Leader == null && a.Pilot != null).ToList();
+            Dictionary<AiSoldier, float> d0 = movers.ToDictionary(a => a, a => Vector3.Distance(a.Pilot.transform.position, a.Objective.center.position));
+            foreach (AiSoldier a in movers) Log($"  front t0 {a.Pilot.UniqueName}: {d0[a]:F0} m to go, globalY {a.Pilot.transform.position.GlobalY():F1}, vel {a.Pilot.rb.velocity.magnitude:F1}");
+            yield return new WaitForSecondsRealtime(10f);
+            foreach (AiSoldier a in movers.Where(m => m.Pilot != null && !m.Pilot.disabled))
+                Log($"  front t10 {a.Pilot.UniqueName}: {Vector3.Distance(a.Pilot.transform.position, a.Objective.center.position):F0} m to go, globalY {a.Pilot.transform.position.GlobalY():F1}, vel {a.Pilot.rb.velocity.magnitude:F1}, wish {a.Wish.magnitude:F1}, target {a.Target?.unitName}, kinematic {a.Pilot.rb.isKinematic}");
+            int closer = movers.Count(a => a.Pilot != null && !a.Pilot.disabled && a.Objective != null && Vector3.Distance(a.Pilot.transform.position, a.Objective.center.position) < d0[a] - 15f);
+            Result("front line advance", closer > 0, $"{closer}/{movers.Count} front-line soldiers moved 15+ m toward their objective in 10 s");
+
+            // 6. Killed -> map, to redeploy.
+            me.TakeDamage(5000f, 0f, 0f, 0f, 0f, PersistentID.None);
+            yield return WaitUntil(() => DynamicMap.mapMaximized, 12f);
+            Result("death -> map", DynamicMap.mapMaximized && InfantryController.Controlled == null, $"map open {DynamicMap.mapMaximized}, infantry released {InfantryController.Controlled == null}");
+            Shot("respawn_map");
         }
 
         private IEnumerator AirbaseTest()

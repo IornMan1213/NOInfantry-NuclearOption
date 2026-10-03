@@ -8,8 +8,15 @@ namespace NOInfantry
     // AI riflemen built on the game's own PilotDismounted unit (networked, visible to every player).
     // Everything runs on the server/host: they replace PilotDismounted.LocalFixedUpdate (via the same patch as the
     // player's soldier), move with SoldierMotor, and shoot through the same server-side rifle damage as players.
+    internal enum AiOrder : byte { Follow, Hold, Move, Free }
+
     internal class AiSoldier
     {
+        internal AiOrder Order;               // fireteams: what their leader told them (patrols ignore it)
+        internal Vector3 OrderPos;            // Hold/Move: formation centre
+        internal float OrderYaw;              // Hold/Move: formation facing
+        internal Airbase Objective;           // Free: airbase to take
+        internal Vector3 FreeOffset;          // Free: spread around the objective
         internal PilotDismounted Pilot;
         internal PilotDismounted Leader;      // friendly fireteam: follow this soldier
         internal Vector3 FormationOffset;     // in the leader's yaw frame
@@ -29,7 +36,7 @@ namespace NOInfantry
     internal static class AiSquads
     {
         internal static readonly Dictionary<PilotDismounted, AiSoldier> All = new Dictionary<PilotDismounted, AiSoldier>();
-        internal static int Spawned, ShotsFired, HitsLanded;
+        internal static int Spawned, ShotsFired, HitsLanded, OrdersReceived;
 
         private static int nameCounter;
         private static AudioSource shotSource;
@@ -58,12 +65,14 @@ namespace NOInfantry
                 ai.Leader = leader;
                 ai.FormationOffset = offset;
             }
-            Plugin.Log.LogInfo($"Fireteam for {leader.UniqueName}: {AliveFollowing(leader)} riflemen");
+            AiSoldier first = All.Values.FirstOrDefault(a => (object)a.Leader == leader);
+            Plugin.Log.LogInfo($"Fireteam for {leader.unitName}: {AliveFollowing(leader)} riflemen; leader global {leader.transform.position.ToGlobalPosition()} rb {leader.rb.position.ToGlobalPosition()}, first rifleman global {first?.Pilot.transform.position.ToGlobalPosition()}");
         }
 
-        internal static void SpawnPatrol(FactionHQ hq, Vector3 center, Vector3 advanceTo, int count)
+        internal static List<AiSoldier> SpawnPatrol(FactionHQ hq, Vector3 center, Vector3 advanceTo, int count)
         {
-            if (!Combat.IsServer || hq == null) return;
+            var squad = new List<AiSoldier>();
+            if (!Combat.IsServer || hq == null) return squad;
             float yaw = Quaternion.LookRotation(Flat(advanceTo - center)).eulerAngles.y;
             for (int i = 0; i < count; i++)
             {
@@ -72,8 +81,38 @@ namespace NOInfantry
                 if (ai == null) continue;
                 ai.IsPatrol = true;
                 ai.PatrolGoal = advanceTo;
+                ai.FreeOffset = new Vector3(Random.Range(-25f, 25f), 0f, Random.Range(-25f, 25f));
+                squad.Add(ai);
             }
-            Plugin.Log.LogInfo($"Enemy patrol of {count} spawned {Vector3.Distance(center, advanceTo):F0} m out");
+            Plugin.Log.LogInfo($"Patrol of {count} spawned {Vector3.Distance(center, advanceTo):F0} m out");
+            return squad;
+        }
+
+        // Server: an order from a player to every AI rifleman following them.
+        internal static int OrderSquad(PilotDismounted leader, AiOrder order, Vector3 pos, bool disband)
+        {
+            if (!Combat.IsServer || leader == null) return 0;
+            int n = 0;
+            float yaw = leader.transform.eulerAngles.y;
+            foreach (AiSoldier ai in All.Values)
+            {
+                if ((object)ai.Leader != leader || ai.Pilot == null || ai.Pilot.disabled) continue;
+                n++;
+                ai.Order = order;
+                ai.OrderYaw = yaw;
+                ai.OrderPos = order == AiOrder.Hold ? leader.transform.position : pos;
+                ai.Objective = null;
+                ai.FreeOffset = new Vector3(Random.Range(-25f, 25f), 0f, Random.Range(-25f, 25f));
+                if (disband)
+                {
+                    ai.Leader = null;
+                    ai.Order = AiOrder.Free;
+                }
+                ai.NextThink = Time.time; // react now
+            }
+            OrdersReceived++;
+            Plugin.Log.LogInfo($"Squad order from {leader.unitName}: {(disband ? "disband" : order.ToString())} ({n} riflemen)");
+            return n;
         }
 
         private static AiSoldier Spawn(FactionHQ hq, Vector3 pos, float yaw, string role)
@@ -83,6 +122,7 @@ namespace NOInfantry
             string name = $"NOI {role} {++nameCounter}";
             PilotDismounted p = spawner.SpawnPilot(GameAssets.i.pilotDismounted, (pos + Vector3.up * SoldierMotor.HoverHeight).ToGlobalPosition(),
                 Quaternion.Euler(0f, yaw, 0f), hq, name);
+            GroundWar.PlaceBody(p.gameObject, p.transform.position, p.transform.rotation); // see PlaceBody: else it starts at the local origin
             var ai = new AiSoldier { Pilot = p, Yaw = yaw, LastPos = p.transform.position, NextThink = Time.time + Random.value * 0.4f };
             All[p] = ai; // registered before its first physics step, so the game's landed-pilot logic never runs on it
             Spawned++;
@@ -120,12 +160,46 @@ namespace NOInfantry
                 ai.BurstLeft = 0;
             }
 
+            // Leader killed or gone: the riflemen carry on by themselves.
+            if ((object)ai.Leader != null && (ai.Leader == null || ai.Leader.disabled))
+            {
+                ai.Leader = null;
+                if (ai.Order == AiOrder.Follow) ai.Order = AiOrder.Free;
+            }
+
             Vector3 goal;
             float range = float.MaxValue;
-            if (ai.Leader != null && !ai.Leader.disabled)
+            bool hasLeader = ai.Leader != null && !ai.Leader.disabled;
+            bool formation = false; // keep tight formation spacing (stop at 2.5 m)
+            if (hasLeader && ai.Order == AiOrder.Follow)
             {
                 Quaternion leaderYaw = Quaternion.Euler(0f, ai.Leader.transform.eulerAngles.y, 0f);
                 goal = ai.Leader.transform.position + leaderYaw * ai.FormationOffset;
+                formation = true;
+            }
+            else if (ai.Order == AiOrder.Hold || ai.Order == AiOrder.Move)
+            {
+                goal = ai.OrderPos + Quaternion.Euler(0f, ai.OrderYaw, 0f) * ai.FormationOffset;
+                formation = true;
+            }
+            else if (ai.Order == AiOrder.Free && !ai.IsPatrol)
+            {
+                // Free roam: hunt soldiers we know about nearby, otherwise take the next airbase.
+                PilotDismounted prey = NearestEnemySoldier(p, 600f);
+                if (prey != null)
+                {
+                    goal = prey.transform.position;
+                    range = ai.Target != null ? 80f : 25f;
+                }
+                else
+                {
+                    // Move on once the objective is fully ours (or gone).
+                    bool secured = ai.Objective != null && ai.Objective.CurrentHQ == p.NetworkHQ
+                                   && (ai.Objective.capture == null || ai.Objective.capture.controlBalance >= 0.99f);
+                    if (ai.Objective == null || ai.Objective.disabled || secured) ai.Objective = GroundWar.NextObjective(p.NetworkHQ, pos);
+                    goal = ai.Objective != null ? ai.Objective.center.position + ai.FreeOffset : pos;
+                    range = ai.Objective != null ? 8f : 0f;
+                }
             }
             else if (ai.IsPatrol)
             {
@@ -142,14 +216,15 @@ namespace NOInfantry
 
             Vector3 toGoal = Flat(goal - pos);
             float dist = toGoal.magnitude;
-            float stopAt = ai.Leader != null ? 2.5f : range;
+            float stopAt = formation ? 2.5f : range;
             bool engaging = ai.Target != null;
             float speed = 0f;
             if (dist > stopAt)
             {
                 // Riflemen keep up with their leader even while shooting; patrols stop to fire once in range.
-                bool farBehind = ai.Leader != null && dist > 15f;
+                bool farBehind = formation && dist > 15f || !formation && !engaging && dist > 200f;
                 speed = farBehind ? Plugin.SprintSpeed.Value : Plugin.WalkSpeed.Value * (engaging ? 0.6f : 1f);
+                if (!formation && !ai.IsPatrol && engaging && dist < range * 1.6f) speed = 0f; // free roamers stop to fight
                 if (ai.IsPatrol && engaging) speed = dist > range * 1.6f ? Plugin.WalkSpeed.Value : 0f;
             }
             Vector3 moveDir = dist > 0.01f ? toGoal / dist : Vector3.zero;
@@ -171,7 +246,11 @@ namespace NOInfantry
             {
                 ai.Yaw = Quaternion.LookRotation(moveDir).eulerAngles.y;
             }
-            else if (ai.Leader != null)
+            else if (formation && ai.Order != AiOrder.Follow)
+            {
+                ai.Yaw = ai.OrderYaw;
+            }
+            else if (hasLeader)
             {
                 ai.Yaw = ai.Leader.transform.eulerAngles.y;
             }
@@ -185,14 +264,16 @@ namespace NOInfantry
             Vector3 eye = p.transform.position + Vector3.up * Plugin.EyeHeight.Value;
             Vector3 aimPoint = t.transform.position + (t is PilotDismounted ? Vector3.up * 0.3f : Vector3.up * 1f);
             float dist = Vector3.Distance(eye, aimPoint);
-            float spread = Plugin.AiSpreadDegrees.Value * (1f + dist / 150f);
+            float spread = Plugin.AiSpreadDegrees.Value * (1f + dist / 300f);
             if (t.rb != null) spread *= 1f + Mathf.Clamp(t.rb.velocity.magnitude / 6f, 0f, 1.5f); // moving targets are harder
             if (t == InfantryController.Controlled)
             {
                 InfantryController.Stance st = InfantryController.Instance.CurrentStance;
                 spread *= st == InfantryController.Stance.Prone ? 1.8f : st == InfantryController.Stance.Crouch ? 1.3f : 1f;
             }
-            Vector3 dir = Quaternion.Euler(Random.Range(-spread, spread), Random.Range(-spread, spread), 0f) * (aimPoint - eye).normalized;
+            // Triangular distribution: most rounds near the aim point, a few at the edge of the cone.
+            float Jitter() => (Random.value - Random.value) * spread;
+            Vector3 dir = Quaternion.Euler(Jitter(), Jitter(), 0f) * (aimPoint - eye).normalized;
 
             // Check fire: never shoot through a friendly. Test the clean aim line (no spread) first.
             if (FriendlyInLine(p, eye, aimPoint))
@@ -336,9 +417,25 @@ namespace NOInfantry
             }
         }
 
+        // Server: remove AI soldiers (test harness / mission reset).
+        internal static int Despawn(System.Func<AiSoldier, bool> which)
+        {
+            var gone = All.Values.Where(which).ToList();
+            foreach (AiSoldier ai in gone)
+            {
+                All.Remove(ai.Pilot);
+                if (ai.Pilot == null) continue;
+                ai.Pilot.NetworkunitState = Unit.UnitState.Returned;
+                ai.Pilot.Networkdisabled = true;
+                Object.Destroy(ai.Pilot.gameObject);
+            }
+            return gone.Count;
+        }
+
         internal static Vector3 GroundPoint(Vector3 p)
         {
-            if (Physics.Raycast(p + Vector3.up * 300f, Vector3.down, out RaycastHit hit, 800f, ~(int)PhysicsLayers.ExclusionZonesMask, QueryTriggerInteraction.Ignore))
+            // Terrain and buildings only: vehicles, aircraft (even the selection menu's preview) and stray colliders are not ground.
+            if (Physics.Raycast(p + Vector3.up * 300f, Vector3.down, out RaycastHit hit, 800f, PhysicsLayers.StaticsMask, QueryTriggerInteraction.Ignore))
             {
                 return hit.point;
             }

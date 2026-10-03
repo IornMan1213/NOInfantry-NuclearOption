@@ -157,3 +157,33 @@ We hijack it rather than spawning a new unit type (no prefab/network registratio
     The MP client now starts like a player (aircraft at the airbase, then F8), which exercises the real ejection path.
   * Unity null-equality: `a.Leader == me` is true for leaderless patrols once `me` is destroyed -> use (object) compares.
 - Results: SP 27/27; MP client 19/19, host 10/10 on two consecutive runs.
+
+## 2026-10-02 v0.7 Ground War (infantry first) + fireteam orders
+- Deploy on foot: IMGUI panel over `AircraftSelectionMenu` (private `airbase` field); server instantiates
+  `GameAssets.i.pilotDismounted` with `Networkplayer = player`, no `parentUnit`, and
+  `NetworkManagerNuclearOption.i.ServerObjectManager.Spawn(go, player.Owner)`. Setup() then takes the
+  "no parent" branch (detaching state); we accept control after 0.7 s instead of 3 s. Menu closed via private `HideSelection`.
+  One soldier per player: an older one is marked Returned and destroyed. `GroundWar.Deployed` is protected like controlled soldiers.
+- Kits (Rifleman / Anti-Tank / Anti-Air) limit launcher target classes; the server re-checks in OnLaunch.
+- Capture: `Capture.GetInRangeUnits` sums `Unit.CaptureStrength` per faction (= definition + `extraCaptureStrength`);
+  `Unit.ModifyCaptureStrength` is public, so soldiers on foot get +SoldierCaptureStrength (removed in vehicles).
+  Units sit in BattlefieldGrid squares updated by the unit's slow update, so walking soldiers are counted.
+  Airbase default CaptureDefense 10, CaptureRange 1000 m; rate/s = (strength diff) / (defense + defenders).
+- Death -> `Player.ShowMap(4f)` (same call the game uses after a crash/ejection) to redeploy.
+- AI orders: Follow / Hold / Move / Free (hunt soldiers within 600 m, else walk to `GroundWar.NextObjective`) / Disband.
+  Leaderless fireteams go Free. Front line: per faction every SquadInterval, a squad spawns SquadStartDistance outside
+  the nearest non-held land airbase on the faction's side; garrison squads when enemy soldiers are inside an own base.
+- Motor pool: `Spawner.SpawnVehicle(..., player)` near the soldier at a friendly airbase, cost from `Player.Allocation`.
+- Net: NoiDeploy, NoiOrder (protocol 2); motor pool rides NoiSquad kinds 32-40.
+- GOTCHA (big): `Instantiate(prefab)` + `transform.SetPositionAndRotation` leaves the Rigidbody at the prefab origin; the
+  first physics step moved the pilot there (the local origin: in testing, the sea ~500 m from the airbase, where
+  `inWater` forces the `ejecting` state). The game's `Spawner.SpawnPilot` has the same pattern, so v0.6 AI soldiers could
+  also start at the origin (riflemen "460 m away", front-line squads in the sea). Fix: set `rb.position/rotation` too
+  (`GroundWar.PlaceBody`), for deployed soldiers and every AI spawn. Found with a per-physics-step spawn trace.
+- Ground probes now use `PhysicsLayers.StaticsMask` only (terrain + buildings): an all-layers ray hit the selection
+  menu's preview aircraft.
+- Menu number keys: the key that picked a menu entry also switched weapon (menu closed before the weapon check).
+- AI accuracy retuned after the fix (fights now happen at real ranges): spread 1.2 deg, x2 at 300 m, triangular
+  distribution (key `Squads/AimSpread`). Patrol vs fireteam at 220 m resolves in ~25 s.
+- Capture calibration from the game data: trucks 2, MRAP 6, APC 12; airbase defence 10. Soldier = 0.5.
+- Results: SP 39/39; MP client 23/23, host 12/12.

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using NuclearOption.Networking;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -53,6 +54,13 @@ namespace NOInfantry
         private static float StanceSpeed(Stance s) => s == Stance.Crouch ? 0.55f : s == Stance.Prone ? 0.25f : 1f;
         private static float StanceSpread(Stance s) => s == Stance.Crouch ? 0.7f : s == Stance.Prone ? 0.45f : 1f;
         private Weapon weapon = Weapon.Rifle;
+        private Kit? kit;                       // null: an ejected pilot carries everything
+        private enum Menu { None, Orders, MotorPool }
+        private Menu menu;
+        private string notice;
+        private float noticeUntil;
+        private Airbase zoneAirbase;            // the airbase whose capture zone we're standing in
+        internal Kit? CurrentKit => kit;
         private Launcher launcher;
         private Airbase nearbyAirbase;
         private float lastHp = 100f;
@@ -185,7 +193,8 @@ namespace NOInfantry
         private static bool OnTheGround(PilotDismounted p)
         {
             if (p.animationState == PilotDismounted.PilotState.landing) return true;
-            if (p.animationState != PilotDismounted.PilotState.detaching || p.timeSinceSpawn < 3f) return false;
+            float settle = GroundWar.RecentlyDeployed ? 0.7f : 3f; // deployed on foot: no seat or parachute to wait for
+            if (p.animationState != PilotDismounted.PilotState.detaching || p.timeSinceSpawn < settle) return false;
             return p.rb != null && p.rb.velocity.sqrMagnitude < 4f;
         }
         private float nextPilotScan;
@@ -242,22 +251,27 @@ namespace NOInfantry
             if (viewModel != null) Destroy(viewModel.gameObject);
             viewModel = ViewModel.Create(cam.mainCamera, fallback);
 
+            kit = GroundWar.RecentlyDeployed ? GroundWar.LocalKit : null;
+            GroundWar.LocalDeployAt = -100f;
+            menu = Menu.None;
             if (launcher == null) launcher = new Launcher(gameObject);
-            launcher.Ammo = Plugin.LauncherAmmo.Value;
+            launcher.Ammo = kit.HasValue ? GroundWar.KitRockets(kit.Value) : Plugin.LauncherAmmo.Value;
+            launcher.AllowAir = !kit.HasValue || GroundWar.KitAllowsAir(kit.Value);
+            launcher.AllowSurface = !kit.HasValue || GroundWar.KitAllowsSurface(kit.Value);
             launcher.CreateTube(cam.mainCamera.transform, Shader.Find("Universal Render Pipeline/Lit") ?? fallback);
             Launcher.FindMissiles();
             SelectWeapon(Weapon.Rifle);
 
             ammo = Plugin.MagazineSize.Value;
             reloadDoneTime = 0f;
-            grenades = Plugin.GrenadeCount.Value;
+            grenades = kit.HasValue ? GroundWar.KitGrenades(kit.Value) : Plugin.GrenadeCount.Value;
             CurrentStance = Stance.Stand;
             eyeOffset = 0f;
             if (footsteps == null) footsteps = new Footsteps(gameObject);
             lastHp = hitPointsRef(pilot);
             BorrowedAssets.Find();
             SetupAudio();
-            Plugin.Log.LogInfo($"Infantry mode ON: {pilot.unitName} at {pilot.transform.position}");
+            Plugin.Log.LogInfo($"Infantry mode ON: {pilot.unitName} at {pilot.transform.position}, kit {(kit.HasValue ? GroundWar.KitName(kit.Value) : "pilot (everything)")}");
         }
 
         private void SetupAudio()
@@ -295,6 +309,14 @@ namespace NOInfantry
                 cam.SetFollowingUnit(pilot != null ? pilot : null);
             }
             Plugin.Log.LogInfo($"Infantry mode OFF ({reason}). Shots {shotsFired}, hits {hits}");
+            menu = Menu.None;
+            // Killed: back to the map to redeploy (not when we replaced the soldier ourselves).
+            bool died = pilot == null || pilot.disabled && pilot.unitState != Unit.UnitState.Returned;
+            if (reason == "pilot disabled or destroyed" && died && !GroundWar.RecentlyDeployed && Plugin.GroundWarEnabled.Value && Plugin.RespawnMap.Value
+                && GameManager.GetLocalPlayer<Player>(out Player localPlayer) && !AirbaseServices.HasNewAircraft())
+            {
+                localPlayer.ShowMap(4f);
+            }
         }
 
         private void KeepCamera()
@@ -375,9 +397,24 @@ namespace NOInfantry
                 else CurrentStance = Stance.Stand; // jump key gets you up first
             }
 
+            // Command menus take the number keys while open.
+            if (InputShim.KeyDown(Plugin.SquadMenuKey.Value)) menu = menu == Menu.Orders ? Menu.None : Menu.Orders;
+            if (InputShim.KeyDown(Plugin.MotorPoolKey.Value))
+            {
+                if (nearbyAirbase == null && menu != Menu.MotorPool) Notice("The motor pool is only at friendly airbases");
+                else menu = menu == Menu.MotorPool ? Menu.None : Menu.MotorPool;
+            }
+            bool menuOpen = menu != Menu.None; // the number key that picks an entry must not also pick a weapon
+            if (menuOpen)
+            {
+                int n = NumberKey();
+                if (n > 0) MenuChoice(n);
+                if (InputShim.KeyDown(KeyCode.Escape)) menu = Menu.None;
+            }
+
             // Weapons
-            if (InputShim.KeyDown(KeyCode.Alpha1)) SelectWeapon(Weapon.Rifle);
-            if (InputShim.KeyDown(KeyCode.Alpha2)) SelectWeapon(Weapon.Launcher);
+            if (!menuOpen && InputShim.KeyDown(KeyCode.Alpha1)) SelectWeapon(Weapon.Rifle);
+            if (!menuOpen && InputShim.KeyDown(KeyCode.Alpha2)) SelectWeapon(Weapon.Launcher);
             float scroll = InputShim.Scroll;
             if (scroll != 0f) SelectWeapon(weapon == Weapon.Rifle ? Weapon.Launcher : Weapon.Rifle);
             if (InputShim.KeyDown(KeyCode.G) && grenades > 0) ThrowGrenade();
@@ -411,8 +448,54 @@ namespace NOInfantry
             }
         }
 
+        private static int NumberKey()
+        {
+            for (int i = 1; i <= 9; i++) if (InputShim.KeyDown(KeyCode.Alpha0 + i) || InputShim.KeyDown(KeyCode.Keypad0 + i)) return i;
+            return 0;
+        }
+
+        private void Notice(string text)
+        {
+            notice = text;
+            noticeUntil = Time.time + 3f;
+        }
+
+        private static readonly string[] OrderNames = { "Follow me", "Hold here", "Move there", "Free roam (take the next airbase)", "Disband (they fight on alone)" };
+
+        internal void IssueOrder(int n) // also used by the test harness
+        {
+            Camera eye = SceneSingleton<CameraStateManager>.i.mainCamera;
+            Vector3 point = Combat.Raycast(eye.transform.position, eye.transform.forward, Controlled, out RaycastHit hit) && hit.distance < 800f
+                ? hit.point
+                : AiSquads.GroundPoint(eye.transform.position + Vector3.ProjectOnPlane(eye.transform.forward, Vector3.up).normalized * 150f);
+            AiOrder order = n == 1 ? AiOrder.Follow : n == 2 ? AiOrder.Hold : n == 3 ? AiOrder.Move : AiOrder.Free;
+            SquadCommands.Order(Controlled, order, point, disband: n == 5);
+            Notice($"Fireteam: {OrderNames[n - 1]}");
+        }
+
+        private void MenuChoice(int n)
+        {
+            if (menu == Menu.Orders && n <= 5)
+            {
+                IssueOrder(n);
+                menu = Menu.None;
+            }
+            else if (menu == Menu.MotorPool && n <= GroundWar.MotorPool.Count)
+            {
+                VehicleDefinition def = GroundWar.MotorPool[n - 1];
+                GroundWar.RequestVehicle(Controlled, n - 1);
+                Notice($"Motor pool: requested {def.unitName}");
+                menu = Menu.None;
+            }
+        }
+
         private void SelectWeapon(Weapon w)
         {
+            if (w == Weapon.Launcher && kit.HasValue && GroundWar.KitRockets(kit.Value) == 0)
+            {
+                Notice($"No launcher in the {GroundWar.KitName(kit.Value)} kit");
+                w = Weapon.Rifle;
+            }
             weapon = w;
             if (viewModel != null) viewModel.gameObject.SetActive(w == Weapon.Rifle && VehicleControl.Driven == null);
             launcher?.SetVisible(w == Weapon.Launcher && VehicleControl.Driven == null);
@@ -629,9 +712,62 @@ namespace NOInfantry
             GUI.Label(new Rect(20f, Screen.height - 60f, 500f, 24f), $"WASD drive   LMB fire   RMB zoom   [{Plugin.UseKey.Value}] get out");
         }
 
+        // Capture status while inside an airbase's capture radius.
+        private void DrawZone(float cx)
+        {
+            Airbase a = zoneAirbase;
+            if (a == null || a.capture == null) return;
+            FactionHQ owner = a.CurrentHQ;
+            FactionHQ capturing = a.capture.capturingHQ;
+            string who = owner != null ? owner.faction.factionName : capturing != null ? $"{capturing.faction.factionName} capturing" : "neutral";
+            float bal = Mathf.Clamp01(a.capture.controlBalance);
+            Color c = owner != null ? owner.faction.color : capturing != null ? capturing.faction.color : Color.gray;
+            var bar = new Rect(cx - 120f, 40f, 240f, 8f);
+            GUI.color = new Color(0f, 0f, 0f, 0.5f);
+            GUI.DrawTexture(bar, Texture2D.whiteTexture);
+            GUI.color = c;
+            GUI.DrawTexture(new Rect(bar.x, bar.y, bar.width * bal, bar.height), Texture2D.whiteTexture);
+            GUI.color = Color.white;
+            GUI.Label(new Rect(cx - 160f, 14f, 320f, 24f), $"{GroundWar.AirbaseName(a)}  -  {who}  {bal * 100f:F0}%");
+        }
+
+        private void DrawMenu(float cy)
+        {
+            if (Time.time < noticeUntil) GUI.Label(new Rect(20f, cy - 140f, 600f, 24f), notice);
+            if (menu == Menu.None) return;
+            var lines = new List<string>();
+            if (menu == Menu.Orders)
+            {
+                lines.Add($"FIRETEAM ORDERS   [{Plugin.FireteamKey.Value}] call riflemen");
+                for (int i = 0; i < OrderNames.Length; i++) lines.Add($"[{i + 1}] {OrderNames[i]}");
+            }
+            else
+            {
+                float funds = GameManager.GetLocalPlayer<Player>(out Player pl) ? pl.Allocation : 0f;
+                lines.Add($"MOTOR POOL   funds {funds:F1}");
+                for (int i = 0; i < GroundWar.MotorPool.Count; i++)
+                {
+                    VehicleDefinition d = GroundWar.MotorPool[i];
+                    lines.Add($"[{i + 1}] {d.unitName}   {GroundWar.Cost(d):F1}");
+                }
+            }
+            lines.Add("[Esc] close");
+            float h = lines.Count * 22f + 12f;
+            var box = new Rect(20f, cy - 100f, 380f, h);
+            GUI.color = new Color(0f, 0f, 0f, 0.6f);
+            GUI.DrawTexture(box, Texture2D.whiteTexture);
+            GUI.color = Color.white;
+            for (int i = 0; i < lines.Count; i++) GUI.Label(new Rect(box.x + 10f, box.y + 6f + i * 22f, 370f, 22f), lines[i]);
+        }
+
         private void OnGUI()
         {
-            if (Controlled == null) return;
+            // The game's aircraft selection menu (spawn, or B at an airbase): show the deploy panel, not the HUD.
+            if (Controlled == null || GroundWar.OpenMenu != null)
+            {
+                GroundWar.DrawDeployPanel();
+                return;
+            }
 
             float cx = Screen.width * 0.5f;
             float cy = Screen.height * 0.5f;
@@ -666,7 +802,11 @@ namespace NOInfantry
             {
                 nearbyVehicle = VehicleControl.FindEnterable(Controlled);
                 nearbyAirbase = AirbaseServices.NearFriendlyAirbase(Controlled);
+                zoneAirbase = FactionRegistry.airbaseLookup.Values.FirstOrDefault(a => a != null && a.center != null && !a.disabled
+                    && Vector3.Distance(a.center.position, Controlled.transform.position) < a.GetRadius());
             }
+            DrawZone(cx);
+            DrawMenu(cy);
             float promptY = cy + 60f;
             if (nearbyVehicle != null)
             {
@@ -676,7 +816,7 @@ namespace NOInfantry
             }
             if (nearbyAirbase != null)
             {
-                GUI.Label(new Rect(cx - 150f, promptY, 400f, 24f), $"[{Plugin.BoardKey.Value}] request an aircraft");
+                GUI.Label(new Rect(cx - 150f, promptY, 400f, 24f), $"[{Plugin.BoardKey.Value}] request an aircraft   [{Plugin.MotorPoolKey.Value}] motor pool");
             }
 
             Camera eye = SceneSingleton<CameraStateManager>.i.mainCamera;
@@ -709,7 +849,8 @@ namespace NOInfantry
             GUI.Label(new Rect(Screen.width - 520f, Screen.height - 60f, 500f, 24f), $"GRENADES  {grenades}    [1] rifle  [2] launcher");
             string help = weapon == Weapon.Launcher ? "RMB lock   LMB fire" : "RMB aim   R reload";
             int team = AiSquads.AliveFollowing(Controlled);
-            if (team > 0) GUI.Label(new Rect(20f, Screen.height - 156f, 300f, 24f), $"FIRETEAM  {team}");
+            if (team > 0) GUI.Label(new Rect(20f, Screen.height - 156f, 400f, 24f), $"FIRETEAM  {team}   [{Plugin.SquadMenuKey.Value}] orders");
+            if (kit.HasValue) GUI.Label(new Rect(20f, Screen.height - 180f, 300f, 24f), GroundWar.KitName(kit.Value).ToUpperInvariant());
             if (CurrentStance != Stance.Stand)
             {
                 GUI.Label(new Rect(20f, Screen.height - 132f, 200f, 24f), CurrentStance == Stance.Crouch ? "CROUCHED" : "PRONE");

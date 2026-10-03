@@ -25,6 +25,10 @@ namespace NOInfantry
     public struct NoiSquad { public uint Pilot; public byte Kind; }
     // Server -> owner: your copy of the soldier is somewhere else; snap to this (sent on takeover if they disagree).
     public struct NoiCorrect { public uint Pilot; public GlobalPosition Pos; public Vector3 Vel; }
+    // Client -> server: deploy me on foot at the friendly airbase nearest Pos, with this kit.
+    public struct NoiDeploy { public byte Kit; public GlobalPosition Pos; }
+    // Client -> server: order my AI fireteam (AiOrder), optionally disbanding it.
+    public struct NoiOrder { public uint Pilot; public byte Order; public bool Disband; public GlobalPosition Pos; }
 
     // Multiplayer for NO Infantry. Every player needs the mod; the server must have it for clients to use it.
     //
@@ -37,7 +41,7 @@ namespace NOInfantry
     // runs on the server, which validates that the sender owns the soldier involved.
     internal static class NetSync
     {
-        internal const int ProtocolVersion = 1;
+        internal const int ProtocolVersion = 2;
 
         internal static bool ServerHasMod => Combat.IsServer || serverAcked;
         internal static int ModdedPlayerCount => moddedPlayers.Count;
@@ -103,7 +107,7 @@ namespace NOInfantry
             p != null && Combat.IsServer && p.Networkplayer != null && p.Networkplayer.Owner != null
             && moddedPlayers.Contains(p.Networkplayer.Owner);
 
-        internal static bool IsProtected(PilotDismounted p) => IsControlled(p) || OwnedByModdedPlayer(p) || AiSquads.IsAi(p);
+        internal static bool IsProtected(PilotDismounted p) => IsControlled(p) || OwnedByModdedPlayer(p) || AiSquads.IsAi(p) || GroundWar.Deployed.Contains(p);
 
         // Any soldier fighting on foot: a player's (local or remote) or an AI rifleman.
         internal static bool IsProtectedOrAi(PilotDismounted p) => IsControlled(p) || AiSquads.IsAi(p);
@@ -112,6 +116,7 @@ namespace NOInfantry
         {
             foreach (PilotDismounted p in AllControlled()) yield return p;
             foreach (PilotDismounted p in AiSquads.All.Keys) if (p != null) yield return p;
+            foreach (PilotDismounted p in GroundWar.Deployed) if (p != null && !p.disabled && !IsControlled(p) && !OwnedByModdedPlayer(p)) yield return p;
             if (moddedPlayers.Count == 0) yield break;
             foreach (Unit u in UnitRegistry.allUnits)
             {
@@ -173,7 +178,13 @@ namespace NOInfantry
             Writer<NoiCorrect>.Write = (w, m) => { w.WriteUInt32(m.Pilot); w.Write(m.Pos); w.Write(m.Vel); };
             Reader<NoiCorrect>.Read = r => new NoiCorrect { Pilot = r.ReadUInt32(), Pos = r.Read<GlobalPosition>(), Vel = r.Read<Vector3>() };
 
+            Writer<NoiDeploy>.Write = (w, m) => { w.WriteByte(m.Kit); w.Write(m.Pos); };
+            Reader<NoiDeploy>.Read = r => new NoiDeploy { Kit = r.ReadByte(), Pos = r.Read<GlobalPosition>() };
+            Writer<NoiOrder>.Write = (w, m) => { w.WriteUInt32(m.Pilot); w.WriteByte(m.Order); w.WriteBoolean(m.Disband); w.Write(m.Pos); };
+            Reader<NoiOrder>.Read = r => new NoiOrder { Pilot = r.ReadUInt32(), Order = r.ReadByte(), Disband = r.ReadBoolean(), Pos = r.Read<GlobalPosition>() };
+
             Register<NoiReturn>(); Register<NoiFx>(); Register<NoiTurretAim>(); Register<NoiTest>(); Register<NoiSquad>(); Register<NoiCorrect>();
+            Register<NoiDeploy>(); Register<NoiOrder>();
         }
 
         private static void Register<T>()
@@ -207,6 +218,9 @@ namespace NOInfantry
                 serverHandler.RegisterHandler<NoiVehicleInput>(OnVehicleInput, false);
                 serverHandler.RegisterHandler<NoiReturn>(OnReturn, false);
                 serverHandler.RegisterHandler<NoiSquad>(OnSquad, false);
+                serverHandler.RegisterHandler<NoiDeploy>(OnDeploy, false);
+                serverHandler.RegisterHandler<NoiOrder>(OnOrder, false);
+                GroundWar.ResetMission();
                 if (AutoTest.Requested) serverHandler.RegisterHandler<NoiTest>((pl, m) => TestRequest?.Invoke(pl, m), false);
                 Plugin.Log.LogInfo("Multiplayer: server handlers registered");
             }
@@ -241,6 +255,8 @@ namespace NOInfantry
                 ServerTick();
                 AiSquads.Tick();
                 SquadCommands.AutoPatrols();
+                GroundWar.CaptureTick();
+                GroundWar.WarfareTick();
             }
             else ExpireVisualDrivers();
         }
@@ -288,6 +304,11 @@ namespace NOInfantry
         internal static void SendReturn(PilotDismounted p) => SendToServer(new NoiReturn { Pilot = NetIdOf(p) });
 
         internal static void SendSquad(PilotDismounted p, byte kind) => SendToServer(new NoiSquad { Pilot = NetIdOf(p), Kind = kind });
+
+        internal static void SendDeploy(Vector3 near, Kit kit) => SendToServer(new NoiDeploy { Kit = (byte)kit, Pos = near.ToGlobalPosition() });
+
+        internal static void SendOrder(PilotDismounted p, AiOrder order, Vector3 pos, bool disband) =>
+            SendToServer(new NoiOrder { Pilot = NetIdOf(p), Order = (byte)order, Disband = disband, Pos = pos.ToGlobalPosition() });
 
         internal static void SendTest(byte kind, string name, Vector3 pos, Vector3 dir) =>
             SendToServer(new NoiTest { Kind = kind, Name = name, Pos = pos.ToGlobalPosition(), Dir = dir });
@@ -429,6 +450,7 @@ namespace NOInfantry
             if (!NetworkManagerNuclearOption.i.Server.World.TryGetIdentity(msg.Target, out NetworkIdentity tid)) return;
             Unit target = tid.GetComponent<Unit>();
             if (target == null || target.disabled) return;
+            if (GroundWar.Kits.TryGetValue(pilot, out Kit kit) && !(target is Aircraft ? GroundWar.KitAllowsAir(kit) : GroundWar.KitAllowsSurface(kit))) return;
             Vector3 clientPos = msg.Pos.ToLocalPosition();
             if (!OriginPlausible(pilot, clientPos)) return;
             rs.LastLaunch = Time.time;
@@ -496,8 +518,31 @@ namespace NOInfantry
 
         private static void OnSquad(INetworkPlayer sender, NoiSquad msg)
         {
-            if (!Plugin.AllowClientSquads.Value || !TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
+            bool vehicle = msg.Kind >= SquadKinds.VehicleBase; // the motor pool isn't an AI request
+            if (!vehicle && !Plugin.AllowClientSquads.Value || !TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
             SquadCommands.Execute(pilot, msg.Kind);
+        }
+
+        private static void OnDeploy(INetworkPlayer sender, NoiDeploy msg)
+        {
+            if (!moddedPlayers.Contains(sender) || sender.Identity == null) return;
+            Player player = sender.Identity.GetComponent<Player>();
+            if (player == null || msg.Kit > (byte)Kit.AntiAir) return;
+            GroundWar.ServerDeploy(player, msg.Pos.ToLocalPosition(), (Kit)msg.Kit);
+        }
+
+        private static void OnOrder(INetworkPlayer sender, NoiOrder msg)
+        {
+            if (!TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot) || msg.Order > (byte)AiOrder.Free) return;
+            AiSquads.OrderSquad(pilot, (AiOrder)msg.Order, msg.Pos.ToLocalPosition(), msg.Disband);
+        }
+
+        // Server: stop treating this soldier as remotely driven (it is being replaced or returned).
+        internal static void ForgetRemote(PilotDismounted pilot)
+        {
+            if (pilot == null) return;
+            if (Remote.TryGetValue(pilot, out RemoteSoldier rs)) ServerLeaveVehicle(rs);
+            Remote.Remove(pilot);
         }
 
         private static void OnReturn(INetworkPlayer sender, NoiReturn msg)

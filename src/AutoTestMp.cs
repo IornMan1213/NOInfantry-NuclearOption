@@ -41,6 +41,7 @@ namespace NOInfantry
 
         private void Start()
         {
+            GroundWar.SuspendWarfare = true; // keep the AI front line out of the scripted steps
             role = Role;
             Application.runInBackground = true;
             shotDir = Path.Combine(Paths.BepInExRootPath, $"NOInfantry_shots_{role}");
@@ -167,6 +168,7 @@ namespace NOInfantry
             }, 120f);
             Result("client joined faction", remote != null, $"client player {remote}, faction {remote?.HQ?.faction?.factionName}");
             if (remote == null) { yield return Finish(); yield break; }
+            remote.AddAllocation(500f); // so the client's motor pool request doesn't depend on the economy
             if (remote.HQ != hq)
             {
                 hq = remote.HQ;
@@ -200,6 +202,8 @@ namespace NOInfantry
             Result("server missile launches", NetSync.StatLaunches > 0, $"{NetSync.StatLaunches}");
             Result("server vehicle control", NetSync.StatVehicleEnters > 0 && NetSync.StatVehicleInputs > 0, $"{NetSync.StatVehicleEnters} enters, {NetSync.StatVehicleInputs} input packets");
             Result("server AI squads", AiSquads.Spawned >= Plugin.SquadSize.Value, $"{AiSquads.Spawned} AI soldiers spawned on request");
+            Result("server deploy on foot", GroundWar.DeployCount > 0, $"{GroundWar.DeployCount} soldiers deployed from the menu");
+            Result("server squad orders", AiSquads.OrdersReceived > 0, $"{AiSquads.OrdersReceived} orders executed");
             yield return Finish();
         }
 
@@ -338,6 +342,7 @@ namespace NOInfantry
             yield return Step("squad", SquadStep());
             yield return Step("ship", ShipStep());
             yield return Step("air hand-off", AirStep());
+            yield return Step("deploy", DeployStep());
             yield return Finish();
         }
 
@@ -538,6 +543,60 @@ namespace NOInfantry
                 && pd.UniqueName.StartsWith("NOI Rifleman") && me != null && Vector3.Distance(pd.transform.position, me.transform.position) < 60f);
             Result("squad (client request)", near >= Plugin.SquadSize.Value, $"{near} server-spawned riflemen visible near the client's soldier");
             Shot("client_squad");
+        }
+
+        private IEnumerator DeployStep()
+        {
+            // Deploy on foot from the aircraft selection menu: the server replaces our soldier with a fresh one.
+            PilotDismounted old = InfantryController.Controlled;
+            if (!AirbaseServices.OpenAircraftMenu(airbase)) { Result("deploy on foot (client)", false, "menu did not open"); yield break; }
+            yield return WaitUntil(() => GroundWar.OpenMenu != null, 5f);
+            yield return new WaitForSecondsRealtime(1.5f);
+            Shot("client_deploy_panel");
+            GroundWar.RequestDeploy(GroundWar.MenuAirbase(GroundWar.OpenMenu) ?? airbase, Kit.AntiAir);
+            yield return WaitUntil(() => InfantryController.Controlled != null && InfantryController.Controlled != old, 25f);
+            PilotDismounted me = InfantryController.Controlled;
+            Result("deploy on foot (client)", me != null && me != old && InfantryController.Instance.CurrentKit == Kit.AntiAir,
+                $"controlled {me?.unitName}, kit {InfantryController.Instance.CurrentKit}, old soldier gone {old == null}");
+            if (me == null || me == old) yield break;
+            soldier = me;
+            InputShim.Scripted = true;
+            yield return new WaitForSecondsRealtime(3f);
+            Result("deployed soldier settled", me.transform.position.GlobalY() > 1f && !me.disabled, $"globalY {me.transform.position.GlobalY():F1}");
+            Shot("client_deployed");
+
+            // Motor pool (the host tops up our funds when we join).
+            InputShim.Press(Plugin.MotorPoolKey.Value);
+            yield return null;
+            yield return null;
+            InputShim.Press(KeyCode.Alpha1);
+            yield return WaitUntil(() => UnitRegistry.allUnits.OfType<GroundVehicle>().Any(v => v != null && v.UniqueName != null && v.UniqueName.StartsWith("NOI Motor Pool")
+                                                                                         && Vector3.Distance(v.transform.position, me.transform.position) < 40f), 8f);
+            GroundVehicle issued = UnitRegistry.allUnits.OfType<GroundVehicle>().FirstOrDefault(v => v != null && v.UniqueName != null && v.UniqueName.StartsWith("NOI Motor Pool")
+                                                                                               && Vector3.Distance(v.transform.position, me.transform.position) < 40f);
+            Result("motor pool (client)", issued != null, $"{issued?.unitName}");
+
+            // Fireteam, then a Hold order over the network: the riflemen stay while we walk off.
+            Vector3 dir = ClearDirection(60f);
+            InfantryController.Instance.AimAt(me.transform.position + dir * 60f + Vector3.up * 1.5f);
+            yield return new WaitForSecondsRealtime(2.5f); // squad request throttle
+            InputShim.Press(Plugin.FireteamKey.Value);
+            yield return new WaitForSecondsRealtime(5f);
+            Vector3 holdAt = me.transform.position;
+            InputShim.Press(Plugin.SquadMenuKey.Value);
+            yield return null;
+            yield return null;
+            InputShim.Press(KeyCode.Alpha2);
+            yield return new WaitForSecondsRealtime(0.5f);
+            InputShim.Hold(KeyCode.W, true);
+            yield return new WaitForSecondsRealtime(6f);
+            InputShim.ReleaseAll();
+            yield return new WaitForSecondsRealtime(2f);
+            float walked = Vector3.Distance(Flat(holdAt), Flat(me.transform.position));
+            int holding = UnitRegistry.allUnits.Count(u => u is PilotDismounted pd && !pd.disabled && pd.UniqueName != null && pd.UniqueName.StartsWith("NOI Rifleman")
+                                                           && Vector3.Distance(Flat(pd.transform.position), Flat(holdAt)) < 14f); // rear wedge slots are 9.2 m out
+            Result("squad hold order (client)", walked > 12f && holding >= Plugin.SquadSize.Value - 1, $"walked {walked:F0} m, {holding} riflemen holding within 14 m of the hold point");
+            Shot("client_hold");
         }
 
         private IEnumerator AirStep()

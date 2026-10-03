@@ -11,7 +11,7 @@ namespace NOInfantry
     {
         public const string Guid = "jayea.noinfantry";
         public const string Name = "NO Infantry";
-        public const string Version = "0.6.0";
+        public const string Version = "0.7.0";
 
         internal static ManualLogSource Log;
         internal static string PluginDir;
@@ -49,6 +49,22 @@ namespace NOInfantry
         internal static ConfigEntry<float> PatrolInterval;
         internal static ConfigEntry<float> PatrolDistance;
         internal static ConfigEntry<bool> AllowClientSquads;
+
+        // Ground War
+        internal static ConfigEntry<bool> GroundWarEnabled;
+        internal static ConfigEntry<float> SoldierCaptureStrength;
+        internal static ConfigEntry<bool> AiWarfare;
+        internal static ConfigEntry<float> WaveInterval;
+        internal static ConfigEntry<int> WaveSize;
+        internal static ConfigEntry<int> MaxAiPerFaction;
+        internal static ConfigEntry<float> WaveStandOff;
+        internal static ConfigEntry<bool> RespawnMap;
+        internal static ConfigEntry<KeyCode> SquadMenuKey;
+        internal static ConfigEntry<KeyCode> MotorPoolKey;
+        internal static ConfigEntry<float> MotorPoolMaxMass;
+        internal static ConfigEntry<float> MotorPoolCostScale;
+        internal static ConfigEntry<float> MotorPoolCooldown;
+        internal static ConfigEntry<int> LastKit;
 
         // Launcher
         internal static ConfigEntry<int> LauncherAmmo;
@@ -138,12 +154,27 @@ namespace NOInfantry
             SquadSize = Config.Bind("Squads", "FireteamSize", 4, "Riflemen in your fireteam");
             PatrolSize = Config.Bind("Squads", "PatrolSize", 5, "Soldiers per enemy patrol");
             AiSoldierRange = Config.Bind("Squads", "EngageRange", 350f, "Metres at which AI riflemen open fire");
-            AiSpreadDegrees = Config.Bind("Squads", "Spread", 2.2f, "AI rifle spread in degrees (grows with distance); lower = deadlier");
+            AiSpreadDegrees = Config.Bind("Squads", "AimSpread", 1.2f, "AI rifle spread in degrees at close range (x2 at 300 m, more vs moving targets); lower = deadlier");
             EnemyPatrols = Config.Bind("Squads", "AutoEnemyPatrols", false, "Periodically send enemy patrols at soldiers on foot");
             PatrolInterval = Config.Bind("Squads", "AutoPatrolInterval", 150f, "Seconds between automatic enemy patrols");
             PatrolDistance = Config.Bind("Squads", "PatrolSpawnDistance", 600f, "How far away patrols appear");
             AllowClientSquads = Config.Bind("Squads", "AllowClientRequests", true, "Server: let clients call fireteams/patrols");
             BoardKey = Config.Bind("Controls", "RequestAircraftKey", KeyCode.B, "At a friendly airbase: open the aircraft selection menu");
+
+            GroundWarEnabled = Config.Bind("Ground War", "Enabled", true, "Infantry-first play: 'Deploy on foot' (with a kit) in the aircraft selection menu, soldiers capture airbases, motor pool at friendly airbases");
+            SoldierCaptureStrength = Config.Bind("Ground War", "CaptureStrengthPerSoldier", 0.5f, "Capture strength of each soldier on foot (players and AI) inside an airbase's capture radius (a truck is 2, an APC 12; airbase defence is 10)");
+            AiWarfare = Config.Bind("Ground War", "AiFrontLine", true, "Server: both sides send AI infantry squads to take the nearest enemy airbase, and garrison their own bases when attacked");
+            WaveInterval = Config.Bind("Ground War", "SquadInterval", 120f, "Seconds between AI squads per faction");
+            WaveSize = Config.Bind("Ground War", "SquadSize", 4, "Soldiers per AI front-line squad");
+            MaxAiPerFaction = Config.Bind("Ground War", "MaxAiPerFaction", 16, "Cap on AI soldiers per faction (performance)");
+            WaveStandOff = Config.Bind("Ground War", "SquadStartDistance", 600f, "How far outside the objective's capture radius squads arrive (they walk the rest)");
+            RespawnMap = Config.Bind("Ground War", "MapOnDeath", true, "Open the map after your soldier dies so you can redeploy");
+            SquadMenuKey = Config.Bind("Ground War", "SquadOrdersKey", KeyCode.T, "Open the fireteam orders menu (then 1-5)");
+            MotorPoolKey = Config.Bind("Ground War", "MotorPoolKey", KeyCode.V, "At a friendly airbase: open the motor pool (then 1-9)");
+            MotorPoolMaxMass = Config.Bind("Ground War", "MotorPoolMaxMass", 40000f, "Heaviest vehicle (kg) the motor pool offers");
+            MotorPoolCostScale = Config.Bind("Ground War", "MotorPoolCostScale", 0.5f, "Vehicle cost as a fraction of its unit value, paid from your funds (0 = free)");
+            MotorPoolCooldown = Config.Bind("Ground War", "MotorPoolCooldown", 45f, "Seconds between vehicles per player");
+            LastKit = Config.Bind("Ground War", "LastKit", 0, "Last kit chosen (0 Rifleman, 1 Anti-Tank, 2 Anti-Air)");
 
             LauncherAmmo = Config.Bind("Launcher", "Rockets", 4, "Missiles carried (2 to select the launcher)");
             LauncherReload = Config.Bind("Launcher", "Reload", 4f, "Seconds between launches");

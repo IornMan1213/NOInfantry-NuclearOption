@@ -18,6 +18,14 @@ namespace NOInfantry
             else if (NetSync.ServerHasMod) NetSync.SendSquad(soldier, kind);
         }
 
+        // From the local player's command menu.
+        internal static void Order(PilotDismounted soldier, AiOrder order, Vector3 pos, bool disband)
+        {
+            if (soldier == null) return;
+            if (Combat.IsServer) AiSquads.OrderSquad(soldier, order, pos, disband);
+            else if (NetSync.ServerHasMod) NetSync.SendOrder(soldier, order, pos, disband);
+        }
+
         // Server side, for a local or remote player's soldier.
         internal static void Execute(PilotDismounted soldier, byte kind)
         {
@@ -30,6 +38,10 @@ namespace NOInfantry
             else if (kind == 2)
             {
                 SpawnPatrolAgainst(soldier);
+            }
+            else if (kind >= SquadKinds.VehicleBase && kind < SquadKinds.VehicleBase + 9)
+            {
+                GroundWar.ServerVehicle(soldier, kind - SquadKinds.VehicleBase);
             }
         }
 
