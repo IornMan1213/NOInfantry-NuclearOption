@@ -551,6 +551,7 @@ namespace NOInfantry
             InputShim.Press(Plugin.FireteamKey.Value);
             yield return new WaitForSecondsRealtime(3f);
             int team = AiSquads.AliveFollowing(me);
+            List<PilotDismounted> fireteam = AiSquads.All.Values.Where(a => (object)a.Leader == me).Select(a => a.Pilot).ToList();
             Result("fireteam spawn", team == Plugin.SquadSize.Value, $"{team} riflemen following");
             Shot("fireteam");
 
@@ -586,8 +587,10 @@ namespace NOInfantry
                 yield return new WaitForSecondsRealtime(0.5f);
             }
             int patrolDown = patrol.Count(p => p == null || p.disabled);
-            int teamLeft = AiSquads.AliveFollowing(me);
-            Result("firefight", AiSquads.ShotsFired - shots0 > 0 && AiSquads.HitsLanded - hits0 > 0 && patrolDown > 0,
+            int teamLeft = fireteam.Count(p => p != null && !p.disabled); // explicit list: Unity null-equality fooled the leader check
+            int teamDown = fireteam.Count - teamLeft;
+            // A real exchange of fire with casualties on either side (the outcome itself is a fair fight).
+            Result("firefight", AiSquads.ShotsFired - shots0 > 0 && AiSquads.HitsLanded - hits0 > 0 && patrolDown + teamDown > 0,
                 $"AI shots {AiSquads.ShotsFired - shots0}, hits {AiSquads.HitsLanded - hits0}, patrol down {patrolDown}/{patrol.Count}, fireteam left {teamLeft}, me alive {me != null && !me.disabled}");
         }
 

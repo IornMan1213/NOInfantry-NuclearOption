@@ -84,6 +84,15 @@ namespace NOInfantry
             Plugin.Log.LogInfo($"Soldier {__instance.UniqueName} hit: pierce {pierceDamage:F0} blast {blastDamage:F0} fire {fireDamage:F0} collision {collisionDamage:F0} by {dealer?.unitName ?? "?"}");
         }
 
+        [HarmonyPatch(typeof(Missile), nameof(Missile.TakeDamage))]
+        [HarmonyPrefix]
+        private static void MissileTakeDamagePrefix(Missile __instance, float impactDamage, PersistentID dealerID)
+        {
+            if (!Launcher.Launched.ContainsKey(__instance) || impactDamage <= 0f) return;
+            UnitRegistry.TryGetUnit(dealerID, out Unit dealer);
+            Plugin.Log.LogWarning($"Launcher missile took impact damage {impactDamage:F1} (from {dealer?.unitName ?? "?"}) at {__instance.timeSinceSpawn:F2} s");
+        }
+
         // Diagnostics for launcher missiles: log how and where they end.
         [HarmonyPatch(typeof(Missile), nameof(Missile.Detonate))]
         [HarmonyPrefix]
@@ -93,6 +102,12 @@ namespace NOInfantry
             Launcher.Launched.Remove(__instance);
             float dist = target != null ? Vector3.Distance(__instance.transform.position, target.transform.position) : -1f;
             Plugin.Log.LogInfo($"Launcher missile {__instance.definition?.unitName} detonating: armed={__instance.IsArmed()} hitArmor={hitArmor} hitTerrain={hitTerrain} distToTarget={dist:F1} m target={target?.unitName}");
+            if (__instance.timeSinceSpawn < 1f)
+            {
+                Plugin.Log.LogWarning($"  early detonation: t={__instance.timeSinceSpawn:F2}s globalY={__instance.transform.position.GlobalY():F1} ownerGlobalY={(__instance.owner != null ? __instance.owner.transform.position.GlobalY() : 0f):F1} y-sea={__instance.transform.position.y - Datum.LocalSeaY:F1} speed={__instance.rb.velocity.magnitude:F0} " +
+                                      $"owner={__instance.owner?.unitName} ownerDist={(__instance.owner != null ? Vector3.Distance(__instance.owner.transform.position, __instance.transform.position) : -1f):F1}" +
+                                      "\n" + System.Environment.StackTrace);
+            }
         }
 
         // PilotDismounted.CheckForCapture "returns" a landed pilot to base (destroying it) when near a

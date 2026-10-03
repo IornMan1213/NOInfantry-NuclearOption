@@ -37,7 +37,7 @@ namespace NOInfantry
         internal static bool IsAi(PilotDismounted p) => p != null && All.ContainsKey(p);
 
         internal static int AliveFollowing(PilotDismounted leader) =>
-            All.Values.Count(a => a.Leader == leader && a.Pilot != null && !a.Pilot.disabled);
+            leader == null ? 0 : All.Values.Count(a => (object)a.Leader == leader && a.Pilot != null && !a.Pilot.disabled); // reference compare: a destroyed leader "== null" would match patrols
 
         // ---------------- spawning (server only) ----------------
 

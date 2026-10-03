@@ -220,12 +220,18 @@ namespace NOInfantry
             LastLaunched = m;
             if (m != null)
             {
+                // A physical bump against the launching soldier counts as impact damage and detonates the missile
+                // on the spot (seen on a multiplayer server, where the soldier copy can sit near the tube).
+                foreach (Collider mc in m.GetComponentsInChildren<Collider>(true))
+                {
+                    foreach (Collider sc in self.GetComponentsInChildren<Collider>(true)) Physics.IgnoreCollision(mc, sc);
+                }
                 Launched[m] = target;
                 // Surface targets: AT missiles fired this way can pass a small vehicle without registering
                 // a hit, so arm the game's own proximity fuse on the target (detonates at closest approach).
                 if (!air) m.SetProxyFuse(target.transform, target.rb);
             }
-            Plugin.Log.LogInfo($"Launched {m?.definition?.unitName} at {target.unitName} ({Vector3.Distance(pos, target.transform.position):F0} m) for {self.unitName}");
+            Plugin.Log.LogInfo($"Launched {m?.definition?.unitName} at {target.unitName} ({Vector3.Distance(pos, target.transform.position):F0} m) for {self.unitName}; launch globalY {pos.GlobalY():F1}, soldier globalY {self.transform.position.GlobalY():F1}, seaY {Datum.LocalSeaY:F1}");
             return m;
         }
 

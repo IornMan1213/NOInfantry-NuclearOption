@@ -23,6 +23,8 @@ namespace NOInfantry
     public struct NoiTest { public byte Kind; public string Name; public GlobalPosition Pos; public Vector3 Dir; }
     // Client asks the server for AI: Kind 1 = fireteam following me, 2 = enemy patrol advancing on me.
     public struct NoiSquad { public uint Pilot; public byte Kind; }
+    // Server -> owner: your copy of the soldier is somewhere else; snap to this (sent on takeover if they disagree).
+    public struct NoiCorrect { public uint Pilot; public GlobalPosition Pos; public Vector3 Vel; }
 
     // Multiplayer for NO Infantry. Every player needs the mod; the server must have it for clients to use it.
     //
@@ -66,6 +68,8 @@ namespace NOInfantry
             internal Unit SpotTarget;
             internal float SpotUntil;
             internal float NextSpot;
+            internal float NextTrace;
+            internal float IgnoreStatesUntil;
         }
 
         internal static readonly Dictionary<PilotDismounted, RemoteSoldier> Remote = new Dictionary<PilotDismounted, RemoteSoldier>();
@@ -166,7 +170,10 @@ namespace NOInfantry
             Writer<NoiSquad>.Write = (w, m) => { w.WriteUInt32(m.Pilot); w.WriteByte(m.Kind); };
             Reader<NoiSquad>.Read = r => new NoiSquad { Pilot = r.ReadUInt32(), Kind = r.ReadByte() };
 
-            Register<NoiReturn>(); Register<NoiFx>(); Register<NoiTurretAim>(); Register<NoiTest>(); Register<NoiSquad>();
+            Writer<NoiCorrect>.Write = (w, m) => { w.WriteUInt32(m.Pilot); w.Write(m.Pos); w.Write(m.Vel); };
+            Reader<NoiCorrect>.Read = r => new NoiCorrect { Pilot = r.ReadUInt32(), Pos = r.Read<GlobalPosition>(), Vel = r.Read<Vector3>() };
+
+            Register<NoiReturn>(); Register<NoiFx>(); Register<NoiTurretAim>(); Register<NoiTest>(); Register<NoiSquad>(); Register<NoiCorrect>();
         }
 
         private static void Register<T>()
@@ -216,6 +223,7 @@ namespace NOInfantry
                 clientHandler.RegisterHandler<NoiFx>(OnFx, false);
                 clientHandler.RegisterHandler<NoiTurretAim>(OnTurretAim, false);
                 clientHandler.RegisterHandler<NoiVehicle>(OnVehicleReject, false);
+                clientHandler.RegisterHandler<NoiCorrect>(OnCorrect, false);
                 Plugin.Log.LogInfo("Multiplayer: client handlers registered");
             }
             if (client == null || !client.Active) clientHandler = null;
@@ -320,8 +328,21 @@ namespace NOInfantry
         private static void OnSoldierState(INetworkPlayer sender, NoiSoldierState msg)
         {
             if (!TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
+            bool firstContact = !Remote.ContainsKey(pilot);
             RemoteSoldier rs = GetOrAddRemote(pilot, sender);
             Vector3 pos = msg.Pos.ToLocalPosition();
+            if (firstContact && Vector3.Distance(pos, pilot.rb.position) > 5f)
+            {
+                // The client's copy was stale when it took control (seen in MP testing: 400 m off, then it fell
+                // into the sea). The server's copy is authoritative: tell the owner to snap to it.
+                Plugin.Log.LogWarning($"Multiplayer: {pilot.UniqueName} takeover desync {Vector3.Distance(pos, pilot.rb.position):F0} m; correcting the client");
+                rs.Pos = pilot.rb.position;
+                rs.Vel = Vector3.zero;
+                rs.IgnoreStatesUntil = Time.time + 0.6f;
+                sender.Send(new NoiCorrect { Pilot = msg.Pilot, Pos = pilot.rb.position.ToGlobalPosition(), Vel = Vector3.zero });
+                return;
+            }
+            if (Time.time < rs.IgnoreStatesUntil) return;
             if (!float.IsNaN(pos.x) && !float.IsNaN(msg.Vel.x))
             {
                 rs.Pos = pos;
@@ -499,6 +520,12 @@ namespace NOInfantry
                     (dead ??= new List<PilotDismounted>()).Add(kv.Key);
                     continue;
                 }
+                if (Time.time >= rs.NextTrace)
+                {
+                    rs.NextTrace = Time.time + 2f;
+                    Vector3 sv = kv.Key.rb.position;
+                    Plugin.Log.LogInfo($"[net] {kv.Key.UniqueName}: server global {sv.ToGlobalPosition()} client global {rs.Pos.ToGlobalPosition()} err {Vector3.Distance(sv, rs.Pos):F1} m, client vel {rs.Vel.magnitude:F1}, kinematic {kv.Key.rb.isKinematic}");
+                }
                 // Spotting for launched optical missiles (soldier must still see the target).
                 if (rs.SpotTarget != null && Time.time < rs.SpotUntil && Time.time >= rs.NextSpot && kv.Key.NetworkHQ != null)
                 {
@@ -615,6 +642,17 @@ namespace NOInfantry
                 visualDrivers[u].driver.Exit();
                 visualDrivers.Remove(u);
             }
+        }
+
+        private static void OnCorrect(INetworkPlayer _, NoiCorrect msg)
+        {
+            PilotDismounted p = InfantryController.Controlled;
+            if (p == null || NetIdOf(p) != msg.Pilot) return;
+            Vector3 pos = msg.Pos.ToLocalPosition();
+            p.transform.position = pos;
+            p.rb.position = pos;
+            p.rb.velocity = msg.Vel;
+            Plugin.Log.LogInfo("Multiplayer: server corrected our soldier's position");
         }
 
         private static void OnVehicleReject(INetworkPlayer _, NoiVehicle msg)

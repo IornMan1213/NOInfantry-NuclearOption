@@ -174,41 +174,14 @@ namespace NOInfantry
                 airbase = FactionRegistry.airbaseLookup.Values.FirstOrDefault(a => a != null && a.CurrentHQ == hq) ?? airbase;
             }
 
-            // Same order as the game's own ejection (Aircraft.SpawnEjectingPilot): owner set before the network
-            // spawn, spawned with the client's connection as owner, standing on the topmost real surface.
-            Vector3 probe = airbase.center.position + airbase.center.forward * 60f;
-            Vector3 spot = probe;
-            if (Physics.Raycast(probe + Vector3.up * 500f, Vector3.down, out RaycastHit top, 1500f, ~(int)PhysicsLayers.ExclusionZonesMask, QueryTriggerInteraction.Ignore))
+            // The client starts the real way (aircraft at the airbase, then F8), so just wait for its soldier.
+            PilotDismounted clientSoldier = null;
+            yield return WaitUntil(() =>
             {
-                spot = top.point;
-            }
-            spot += Vector3.up * 1.3f;
-            GameObject go = Instantiate(GameAssets.i.pilotDismounted);
-            go.transform.SetPositionAndRotation(spot, Quaternion.identity);
-            PilotDismounted clientSoldier = go.GetComponent<PilotDismounted>();
-            clientSoldier.NetworkUniqueName = "NOI MP Soldier";
-            clientSoldier.NetworkstartPosition = spot.ToGlobalPosition();
-            clientSoldier.NetworkstartRotation = Quaternion.identity;
-            clientSoldier.NetworkHQ = hq;
-            clientSoldier.NetworkunitName = clientSoldier.definition.unitName;
-            clientSoldier.Networkplayer = remote;
-            clientSoldier.SetCollidable(true);
-            NetworkManagerNuclearOption.i.ServerObjectManager.Spawn(go, remote.Owner);
-            Log($"spawned the client's soldier at {spot}");
-
-            float diagEnd = Time.realtimeSinceStartup + 40f, nextDiag = 0f;
-            while (!NetSync.Remote.ContainsKey(clientSoldier) && Time.realtimeSinceStartup < diagEnd)
-            {
-                if (Time.realtimeSinceStartup > nextDiag)
-                {
-                    nextDiag = Time.realtimeSinceStartup + 5f;
-                    Log(clientSoldier == null ? "diag: soldier destroyed" :
-                        $"diag: soldier state={clientSoldier.animationState} unitState={clientSoldier.unitState} disabled={clientSoldier.disabled} " +
-                        $"radarAlt={clientSoldier.radarAlt:F1} speed={clientSoldier.rb.velocity.magnitude:F1} kinematic={clientSoldier.rb.isKinematic} protected={NetSync.IsProtected(clientSoldier)}");
-                }
-                yield return null;
-            }
-            Result("remote soldier streaming", NetSync.Remote.ContainsKey(clientSoldier), "server receives the client's soldier state");
+                clientSoldier = NetSync.Remote.Keys.FirstOrDefault(k => k != null && !k.disabled);
+                return clientSoldier != null;
+            }, 120f);
+            Result("remote soldier streaming", clientSoldier != null, "server receives the client's soldier state");
 
             // Watch the soldier move on the server and report counters until the client leaves.
             Vector3 start = clientSoldier != null ? clientSoldier.transform.position : Vector3.zero;
@@ -226,6 +199,7 @@ namespace NOInfantry
             Result("server grenades", NetSync.StatGrenades > 0, $"{NetSync.StatGrenades}");
             Result("server missile launches", NetSync.StatLaunches > 0, $"{NetSync.StatLaunches}");
             Result("server vehicle control", NetSync.StatVehicleEnters > 0 && NetSync.StatVehicleInputs > 0, $"{NetSync.StatVehicleEnters} enters, {NetSync.StatVehicleInputs} input packets");
+            Result("server AI squads", AiSquads.Spawned >= Plugin.SquadSize.Value, $"{AiSquads.Spawned} AI soldiers spawned on request");
             yield return Finish();
         }
 
@@ -297,10 +271,11 @@ namespace NOInfantry
             got(u);
         }
 
-        private Vector3 ClearDirection(float dist)
+        private Vector3 ClearDirection(float dist) => ClearDirection(dist, Flat(SceneSingleton<CameraStateManager>.i.mainCamera.transform.forward).normalized);
+
+        private Vector3 ClearDirection(float dist, Vector3 baseDir)
         {
             Vector3 eye = soldier.transform.position + Vector3.up * Plugin.EyeHeight.Value;
-            Vector3 baseDir = Flat(SceneSingleton<CameraStateManager>.i.mainCamera.transform.forward).normalized;
             for (int i = 0; i < 24; i++)
             {
                 Vector3 dir = Quaternion.Euler(0f, i * 15f, 0f) * baseDir;
@@ -321,6 +296,13 @@ namespace NOInfantry
             Result("handshake (client side)", NetSync.ServerHasMod, "server answered NoiHello");
             if (!NetSync.ServerHasMod) { yield return Finish(); yield break; }
 
+            // Start like a player: an aircraft at our airbase (the host spawns it for us), then F8 to climb out.
+            yield return Request(5, "NOI MP Start", airbase.center.position + airbase.center.right * 40f, airbase.center.forward, _ => { });
+            yield return WaitUntil(() => AirbaseServices.HasNewAircraft(), 30f);
+            Result("client aircraft", AirbaseServices.HasNewAircraft(), "flying a fresh aircraft at the airbase");
+            yield return new WaitForSecondsRealtime(4f);
+            InputShim.Scripted = true;
+            InputShim.Press(KeyCode.F8);
             float waitEnd = Time.realtimeSinceStartup + 90f;
             float nextDiag = 0f;
             while (InfantryController.Controlled == null && Time.realtimeSinceStartup < waitEnd)
@@ -342,6 +324,8 @@ namespace NOInfantry
             soldier = InfantryController.Controlled;
             Result("client soldier control", soldier != null, "auto-entered infantry mode on the client");
             if (soldier == null) { yield return Finish(); yield break; }
+            yield return WaitUntil(() => soldier.rb.velocity.magnitude < 2f, 20f);
+            Log($"soldier settled: globalY {soldier.transform.position.GlobalY():F1}, speed {soldier.rb.velocity.magnitude:F1}");
             InputShim.Scripted = true;
             yield return new WaitForSecondsRealtime(1f);
             Shot("client_on_foot");
@@ -351,6 +335,7 @@ namespace NOInfantry
             yield return Step("grenade", GrenadeStep());
             yield return Step("launcher-air", LauncherAir());
             yield return Step("vehicle", VehicleStep());
+            yield return Step("squad", SquadStep());
             yield return Step("ship", ShipStep());
             yield return Step("air hand-off", AirStep());
             yield return Finish();
@@ -390,7 +375,7 @@ namespace NOInfantry
                 $"{InfantryController.Instance.ShotsFired - shots0} shots, {InfantryController.Instance.Hits - hits0} local hits (server applies damage)");
 
             // Launcher against the same kind of target, far enough to need guidance.
-            Vector3 d2 = ClearDirection(250f);
+            Vector3 d2 = ClearDirection(250f, Quaternion.Euler(0f, 100f, 0f) * dir); // away from the first truck
             Unit target = null;
             yield return Request(1, "NOI MP Truck 2", Ground(soldier.transform.position + d2 * 250f) + Vector3.up, -d2, u => target = u);
             if (target == null) { Result("launcher-surface", false, "no target"); yield break; }
@@ -542,6 +527,17 @@ namespace NOInfantry
             Result("ship drive", moved > 30f && turned > 3f, $"moved {moved:F0} m, yaw {turned:F0} deg (server-simulated)");
             InputShim.Press(KeyCode.E);
             yield return WaitUntil(() => VehicleControl.Driven == null, 3f);
+        }
+
+        private IEnumerator SquadStep()
+        {
+            InputShim.Press(Plugin.FireteamKey.Value);
+            yield return new WaitForSecondsRealtime(5f);
+            PilotDismounted me = InfantryController.Controlled;
+            int near = UnitRegistry.allUnits.Count(u => u is PilotDismounted pd && !pd.disabled && pd.UniqueName != null
+                && pd.UniqueName.StartsWith("NOI Rifleman") && me != null && Vector3.Distance(pd.transform.position, me.transform.position) < 60f);
+            Result("squad (client request)", near >= Plugin.SquadSize.Value, $"{near} server-spawned riflemen visible near the client's soldier");
+            Shot("client_squad");
         }
 
         private IEnumerator AirStep()
