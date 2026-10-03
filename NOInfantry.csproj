@@ -6,7 +6,7 @@
     <RootNamespace>NOInfantry</RootNamespace>
     <LangVersion>9</LangVersion>
     <Nullable>disable</Nullable>
-    <NuclearOptionPath>C:\Program Files (x86)\Steam\steamapps\common\Nuclear Option</NuclearOptionPath>
+    <NuclearOptionPath Condition="'$(NuclearOptionPath)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Nuclear Option</NuclearOptionPath>
     <Managed>$(NuclearOptionPath)\NuclearOption_Data\Managed</Managed>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
