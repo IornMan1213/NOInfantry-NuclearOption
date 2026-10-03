@@ -143,6 +143,7 @@ namespace NOInfantry
                 p.rb.position = g;
                 p.rb.velocity = t != null ? t.rb.velocity * 0.3f : Vector3.zero;
                 p.SetCollidable(true);
+                SetVisible(p, true);
                 ai.Riding = null;
                 ai.NextThink = Time.time + 0.5f + n * 0.2f;
                 if (wrecked)
@@ -154,6 +155,14 @@ namespace NOInfantry
             }
             Dismounts++;
             Plugin.Log.LogInfo($"Front line: {c.Riders.Count} soldiers dismount ({why}) {Vector3.Distance(center, c.Objective.center.position):F0} m from {GroundWar.AirbaseName(c.Objective)}");
+        }
+
+        internal static void SetVisible(PilotDismounted p, bool visible)
+        {
+            foreach (Renderer r in p.GetComponentsInChildren<Renderer>(true))
+            {
+                if (r.enabled != visible) r.enabled = visible;
+            }
         }
 
         internal static void ResetMission()

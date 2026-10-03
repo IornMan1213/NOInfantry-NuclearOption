@@ -143,9 +143,12 @@ namespace NOInfantry
             PilotDismounted p = ai.Pilot;
             if (ai.Riding != null)
             {
-                // Aboard: ride on the back of the truck (collider off), nothing else.
+                // Aboard: inside the truck, collider off and hidden. The collider is forced off every step: the game's
+                // pilot Setup re-enables it after spawn, and riders' colliders inside the hull blew the truck up.
                 GroundVehicle t = ai.Riding;
                 if (t == null || t.disabled) return; // Transport.Tick dismounts the survivors
+                p.SetCollidable(false);
+                Transport.SetVisible(p, false);
                 Vector3 seat = Transport.Seat(t, ai.Seat);
                 p.transform.position = seat;
                 p.rb.position = seat;

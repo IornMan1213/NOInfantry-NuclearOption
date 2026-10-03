@@ -37,6 +37,19 @@ namespace NOInfantry
             Directory.CreateDirectory(shotDir);
             foreach (string f in Directory.GetFiles(shotDir, "*.png")) File.Delete(f);
             StartCoroutine(Run());
+            StartCoroutine(FpsSampler());
+        }
+
+        private IEnumerator FpsSampler()
+        {
+            while (true)
+            {
+                int f0 = Time.frameCount;
+                float t0 = Time.realtimeSinceStartup, g0 = Time.time;
+                yield return new WaitForSecondsRealtime(10f);
+                float dt = Time.realtimeSinceStartup - t0;
+                Log($"perf: {(Time.frameCount - f0) / dt:F1} fps, game time ran {(Time.time - g0) / dt * 100f:F0}% of real time");
+            }
         }
 
         private void Log(string line)
@@ -105,7 +118,7 @@ namespace NOInfantry
         // Runs a step; exceptions inside a step are reported and the run continues.
         private IEnumerator Step(string name, IEnumerator body)
         {
-            Log($"--- {name}");
+            Log($"--- {name} ({1f / Mathf.Max(Time.smoothDeltaTime, 0.001f):F0} fps, timeScale {Time.timeScale:F2}, fixed dt {Time.fixedDeltaTime:F3}, max dt {Time.maximumDeltaTime:F2})");
             InputShim.ReleaseAll();
             while (true)
             {
@@ -209,6 +222,15 @@ namespace NOInfantry
             }
             Log($"mission loaded: {MissionManager.CurrentMission?.Name}, state {GameManager.gameState}");
             yield return new WaitForSecondsRealtime(5f);
+            // Heavy plugin sets keep loading assets after the mission starts (seen: 65 s setup, early steps at a
+            // few fps). Wait for 3 s of steady frames so movement/firing checks measure the mod, not the hitching.
+            float steadySince = Time.realtimeSinceStartup, waitEnd = Time.realtimeSinceStartup + 90f;
+            while (Time.realtimeSinceStartup < waitEnd && Time.realtimeSinceStartup - steadySince < 3f)
+            {
+                if (Time.unscaledDeltaTime > 0.1f) steadySince = Time.realtimeSinceStartup;
+                yield return null;
+            }
+            Log($"frames steady after {Time.realtimeSinceStartup:F0} s ({1f / Mathf.Max(Time.unscaledDeltaTime, 0.001f):F0} fps)");
 
             List<FactionHQ> hqs = FactionRegistry.GetAllHQs().ToList();
             hq = player.HQ ?? hqs.OrderByDescending(h => FactionRegistry.airbaseLookup.Values.Count(a => a != null && a.CurrentHQ == h)).First();
@@ -232,6 +254,7 @@ namespace NOInfantry
 
             Vector3 spot = Ground(airbase.center.position + airbase.center.forward * 60f) + Vector3.up * 2f;
             soldier = Spawner.SpawnPilot(GameAssets.i.pilotDismounted, spot.ToGlobalPosition(), Quaternion.identity, hq, "NOI Test Soldier");
+            GroundWar.PlaceBody(soldier.gameObject, spot, Quaternion.identity); // see PlaceBody
             soldier.Networkplayer = player;
             SceneSingleton<CameraStateManager>.i.SetFollowingUnit(soldier);
             yield return WaitUntil(() => InfantryController.Controlled == soldier, 30f);
@@ -740,6 +763,28 @@ namespace NOInfantry
                 Log($"  front t10 {a.Pilot.UniqueName}: {Vector3.Distance(a.Pilot.transform.position, a.Objective.center.position):F0} m to go, globalY {a.Pilot.transform.position.GlobalY():F1}, vel {a.Pilot.rb.velocity.magnitude:F1}, wish {a.Wish.magnitude:F1}, target {a.Target?.unitName}, kinematic {a.Pilot.rb.isKinematic}");
             int closer = movers.Count(a => a.Pilot != null && !a.Pilot.disabled && a.Objective != null && Vector3.Distance(a.Pilot.transform.position, a.Objective.center.position) < d0[a] - 15f);
             Result("front line advance", closer > 0, $"{closer}/{movers.Count} front-line soldiers moved 15+ m toward their objective in 25 s (trucks sent {Transport.Sent})");
+            // Trucks: an enemy squad driven at our airbase from 1.8 km out.
+            {
+                Vector3 away = Flat(airbase.center.forward).normalized;
+                Vector3 start = Vector3.zero;
+                for (int i = 0; i < 12 && start == Vector3.zero; i++)
+                {
+                    Vector3 cand = Ground(airbase.center.position + Quaternion.Euler(0f, i * 30f, 0f) * away * 1800f);
+                    if (cand.GlobalY() > 2f) start = cand;
+                }
+                Convoy convoy = start != Vector3.zero ? Transport.Send(enemyHq, start, airbase, 3) : null;
+                if (convoy == null) Result("truck transport", false, $"no convoy (dry start {start != Vector3.zero}, truck {Transport.TruckDef?.unitName})");
+                else
+                {
+                    float d0t = Vector3.Distance(convoy.Truck.transform.position, airbase.center.position);
+                    yield return new WaitForSecondsRealtime(25f);
+                    float d1t = convoy.Truck != null ? Vector3.Distance(convoy.Truck.transform.position, airbase.center.position) : -1f;
+                    int aboard = convoy.Riders.Count(r => r.Riding != null && r.Pilot != null && Vector3.Distance(r.Pilot.transform.position, convoy.Truck.transform.position) < 6f);
+                    Result("truck transport", convoy.Truck != null && d1t < d0t - 30f && aboard == convoy.Riders.Count && aboard > 0,
+                        $"{convoy.Truck?.unitName}: {d0t:F0} -> {d1t:F0} m from the airbase in 25 s, {aboard}/{convoy.Riders.Count} riding");
+                    Shot("truck");
+                }
+            }
             Convoy first = Transport.Convoys.FirstOrDefault(c => c.Riders.Count > 0);
             if (first != null)
             {
@@ -750,6 +795,7 @@ namespace NOInfantry
                 int onFoot = riders.Count(r => r.Pilot != null && !r.Pilot.disabled && r.Riding == null && r.Pilot.transform.position.GlobalY() > 0.5f);
                 Result("truck dismount", onFoot == riders.Count, $"{onFoot}/{riders.Count} riders on the ground beside the {first.Truck?.unitName}");
             }
+            Log($"cleared {AiSquads.Despawn(a => a.Leader == null)} front-line/convoy soldiers before the medical steps");
 
             // 6. Medical: go down, get revived by the fireteam, revive a rifleman, bandage as a medic.
             yield return MedicalSteps();
@@ -804,7 +850,8 @@ namespace NOInfantry
                 Shot("reviving");
                 yield return WaitUntil(() => !Medical.IsDowned(r), Plugin.ReviveTime.Value + 3f);
                 InputShim.ReleaseAll();
-                Result("player revives AI", !Medical.IsDowned(r) && !r.disabled && Medical.Revives > revives0, $"{r.unitName} downed {Medical.IsDowned(r)}, HP {Medical.Health(r):F0}");
+                Result("player revives AI", !Medical.IsDowned(r) && !r.disabled && Medical.Revives > revives0,
+                    $"{r.unitName} downed {Medical.IsDowned(r)}, HP {Medical.Health(r):F0}, distance {Vector3.Distance(r.transform.position, me.transform.position):F1} m");
             }
 
             // c) Redeploy as a medic, take a wound, bandage ourselves.

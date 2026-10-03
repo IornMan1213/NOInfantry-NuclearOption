@@ -282,6 +282,20 @@ namespace NOInfantry
             Plugin.Log.LogInfo($"Infantry mode ON: {pilot.unitName} at {pilot.transform.position}, kit {(kit.HasValue ? GroundWar.KitName(kit.Value) : "pilot (everything)")}");
         }
 
+        // The game's own Player.ShowMap silently does nothing while DynamicMap.AllowedToOpen is false (the aircraft
+        // selection menu toggles it), which left a dead soldier with no way back in testing. Open it ourselves.
+        private System.Collections.IEnumerator MapAfterDeath()
+        {
+            yield return new WaitForSecondsRealtime(4f);
+            if (Controlled != null || AirbaseServices.HasNewAircraft() || DynamicMap.mapMaximized || GroundWar.OpenMenu != null) yield break;
+            DynamicMap map = SceneSingleton<DynamicMap>.i;
+            if (map == null) yield break;
+            bool wasAllowed = DynamicMap.AllowedToOpen;
+            DynamicMap.AllowedToOpen = true;
+            map.Maximize();
+            Plugin.Log.LogInfo($"Killed: map opened to redeploy (was allowed {wasAllowed}, open now {DynamicMap.mapMaximized})");
+        }
+
         private void SetupAudio()
         {
             if (audioSource != null) return;
@@ -320,10 +334,12 @@ namespace NOInfantry
             menu = Menu.None;
             // Killed: back to the map to redeploy (not when we replaced the soldier ourselves).
             bool died = pilot == null || pilot.disabled && pilot.unitState != Unit.UnitState.Returned;
+            if (reason == "pilot disabled or destroyed")
+                Plugin.Log.LogInfo($"Soldier lost: died {died} (state {(pilot != null ? pilot.unitState.ToString() : "destroyed")}), recently deployed {GroundWar.RecentlyDeployed}, new aircraft {AirbaseServices.HasNewAircraft()}");
             if (reason == "pilot disabled or destroyed" && died && !GroundWar.RecentlyDeployed && Plugin.GroundWarEnabled.Value && Plugin.RespawnMap.Value
                 && GameManager.GetLocalPlayer<Player>(out Player localPlayer) && !AirbaseServices.HasNewAircraft())
             {
-                localPlayer.ShowMap(4f);
+                StartCoroutine(MapAfterDeath());
             }
         }
 
@@ -477,7 +493,7 @@ namespace NOInfantry
         {
             if (!Plugin.ReviveEnabled.Value || VehicleControl.Driven != null) { interactHeld = 0f; return; }
             PilotDismounted me = Controlled;
-            PilotDismounted downed = Medical.DownedNear(me, 2.5f).OrderBy(d => Vector3.Distance(d.transform.position, me.transform.position)).FirstOrDefault();
+            PilotDismounted downed = Medical.DownedNear(me, 3.5f).OrderBy(d => Vector3.Distance(d.transform.position, me.transform.position)).FirstOrDefault();
             bool medic = kit == Kit.Medic;
             if (downed != null && InputShim.Key(Plugin.InteractKey.Value))
             {
