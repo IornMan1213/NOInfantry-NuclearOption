@@ -4,7 +4,8 @@ A BepInEx mod that lets you leave the cockpit and keep fighting as a soldier, th
 ground vehicles and ships, shoot down aircraft with a shoulder launcher, and walk back to an airbase to
 take off again.
 
-> **Single-player / host only** for now. In multiplayer the server simulates your pilot.
+> **Multiplayer:** works when the **server (or host) and every player who wants to fight on foot** have the mod.
+> Players without it can still join and play normally. On a server without the mod, infantry mode stays off.
 
 ## Install
 1. Install [BepInEx 5](https://github.com/BepInEx/BepInEx/releases) (x64) into the Nuclear Option folder and run the game once.
@@ -46,6 +47,15 @@ RMB zooms, E gets out.
 - Sounds and effects are borrowed at runtime from the game's own assets; no game files are shipped.
 - Built with AI assistance (Claude Code).
 
+## Multiplayer
+- The host / dedicated server must run the mod; clients that want infantry need it too.
+- Your client simulates your own soldier and streams it to the server (smooth movement for you).
+- Everything that affects other units runs on the server, which checks you own the soldier: rifle damage,
+  grenades, launcher missiles (the game's own networked missiles), driving vehicles and ships, returning to base.
+- Other modded players see your tracers, grenades and turret aim; unmodded players see the soldier, vehicles,
+  missiles and gunfire through the game's normal sync.
+- Handshake: on joining, a modded client sends one hello; an unmodded server ignores it, so nothing changes there.
+
 ## Automated in-game test
 The mod contains a self-test that drives the soldier through every feature without touching your
 mouse or keyboard, then quits:
@@ -58,7 +68,14 @@ Results go to `BepInEx/NOInfantry_autotest.txt` and screenshots to `BepInEx/NOIn
 It covers: spawn on foot, walk/sprint/jump, rifle hits, grenade, launcher vs ground and air targets
 (lock, launch, damage), driving and firing a ground vehicle, a ship's helm (throttle, steering direction,
 leaving the helm), the airbase aircraft menu, the hand-off when a new aircraft spawns, and F8 dismount.
-Current result: 20/20 passing (v0.4.0).
+Current result: 20/20 passing (v0.5.0).
+
+Multiplayer self-test (two instances on one PC over UDP; run the host first):
+```
+NuclearOption.exe -autoHost -socket UDP -port 7777 -state Multiplayer -mission "Free Flight - Ignus Archipelago" -noiAutotest -noiRole host -screen-fullscreen 0
+NuclearOption.exe -autoConnect 127.0.0.1 -socket UDP -port 7777 -noiAutotest -noiRole client -screen-fullscreen 0
+```
+Reports: `BepInEx/NOInfantry_mptest_host.txt` and `..._client.txt`. Current result: client 17/17, host 9/9.
 
 ## Build
 `dotnet build -c Release` (edit `NuclearOptionPath` in `NOInfantry.csproj`). The build copies the DLL and

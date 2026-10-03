@@ -11,7 +11,7 @@ namespace NOInfantry
     {
         public const string Guid = "jayea.noinfantry";
         public const string Name = "NO Infantry";
-        public const string Version = "0.4.0";
+        public const string Version = "0.5.0";
 
         internal static ManualLogSource Log;
         internal static string PluginDir;

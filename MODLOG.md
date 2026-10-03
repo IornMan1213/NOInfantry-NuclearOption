@@ -112,3 +112,30 @@ We hijack it rather than spawning a new unit type (no prefab/network registratio
   join in Free Flight Ignus, before any harness spawns (mission vehicles with null NetworkHQ). Absent in the user's
   normal session log.
 - Result: 20/20 PASS.
+
+## 2026-10-02 v0.5 multiplayer
+- Mirage custom messages work from a mod: set `Writer<T>.Write` / `Reader<T>.Read` (public setters) by hand,
+  `MessagePacker.RegisterMessage<T>()`, `server/client.MessageHandler.RegisterHandler<T>(MessageDelegateWithPlayer<T>, false)`.
+  Message id = FullName stable hash & 0xFFFF (checked for clashes at startup). Handlers re-attached by polling because the
+  game creates a new MessageHandler per session.
+- Unknown message => Mirage charges the sender 60 of 200 error tokens (refilling); enough errors => kick, and the game's
+  authenticator can escalate ErrorKick to a ban. So: client sends ONE NoiHello; only servers that ack get further traffic;
+  servers only send to players that said hello.
+- Owner-predicted soldier: client `SetLocalSim(true)` on its pilot (PilotDismountedNetworkTransform only applies snapshots
+  when !LocalSim), streams NoiSoldierState at 20 Hz; server replaces LocalFixedUpdate with ServerStep (follow / snap > 25 m);
+  the game's NT then relays it to everyone else.
+- Server-authoritative: shots (fire-rate + origin < 6 m checks), grenades, missiles (Spawner.SpawnMissile), vehicles/ships
+  (per-player VehicleDriver instances; clients run visual drivers fed by NoiTurretAim so barrels match), return to base.
+  Ownership = `pilot.Networkplayer.Owner == sender`. Clients spot via the game's `FactionHQ.CmdUpdateTrackingInfo`.
+- Server weapon fire already reaches clients (SetFiringState/RemoteFireAuto), so driving clients never fire locally.
+- Two-instance test over UDP (`-autoHost -socket UDP` / `-autoConnect 127.0.0.1`), no Steam auth on UDP
+  (Steam path rejects a second connection from the same licence).
+- MP bugs found by the harness:
+  1. `NetworkManagerNuclearOption.GamePlayers` is never filled; use `UnitRegistry.playerLookup`.
+  2. Owner set after network spawn => client never links Player.PilotDismounted; controller now scans for owned pilots.
+  3. Server "returned" a modded client's soldier at an airbase before the client could take control (landed state lags
+     the 3 s capture check) => soldiers owned by modded players are protected from Capture/AnyNearAirbase.
+  4. Spawn-time `TooMuchForce` killed a ground-spawned soldier on the server => ignored for 5 s after spawn for protected soldiers.
+  5. Client launch point sat inside the lagging server copy => missile detonated on its own soldier. Server now launches
+     from its copy (eye + 3 m along the aim).
+- Results: MP client 17/17, host 9/9; SP 20/20.
