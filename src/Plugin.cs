@@ -126,6 +126,8 @@ namespace NOInfantry
             AaMissileName = Config.Bind("Launcher", "AntiAirMissile", "", "Force a missile by short name (see log for candidates); empty = lightest IR anti-air missile");
             AtMissileName = Config.Bind("Launcher", "AntiSurfaceMissile", "", "Force a missile by short name; empty = lightest self-guided anti-surface missile");
 
+            NetSync.RegisterSerializers();
+
             var harmony = new Harmony(Guid);
             foreach (System.Type patchClass in new[] { typeof(Patches), typeof(VehicleControl) })
             {

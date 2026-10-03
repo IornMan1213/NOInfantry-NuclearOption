@@ -10,10 +10,13 @@ namespace NOInfantry
         internal static int Detonations;
 
         private PersistentID thrower;
+        private bool authoritative;
         private float fuse;
         private Rigidbody rb;
 
-        internal static void Throw(PilotDismounted pilot, Vector3 origin, Vector3 velocity)
+        // authoritative: this copy applies damage (server/host). Remote players' grenades are shown to
+        // other clients with authoritative = false (visual and explosion effect only).
+        internal static void Throw(PilotDismounted pilot, Vector3 origin, Vector3 velocity, bool authoritative = true)
         {
             var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             go.name = "NOInfantryGrenade";
@@ -30,10 +33,14 @@ namespace NOInfantry
             if (material != null) renderer.sharedMaterial = material;
 
             var col = go.GetComponent<Collider>();
-            foreach (Collider c in pilot.GetComponentsInChildren<Collider>()) Physics.IgnoreCollision(col, c);
+            if (pilot != null)
+            {
+                foreach (Collider c in pilot.GetComponentsInChildren<Collider>()) Physics.IgnoreCollision(col, c);
+            }
 
             var g = go.AddComponent<Grenade>();
-            g.thrower = pilot.persistentID;
+            g.thrower = pilot != null ? pilot.persistentID : PersistentID.None;
+            g.authoritative = authoritative && Combat.IsServer;
             g.fuse = Plugin.GrenadeFuse.Value;
             g.rb = go.AddComponent<Rigidbody>();
             g.rb.mass = 0.4f;
@@ -59,7 +66,7 @@ namespace NOInfantry
 
             // Lift slightly so the frag traces don't start inside the ground.
             Vector3 blastPos = pos + normal * 0.2f;
-            if (NetworkManagerNuclearOption.i != null && NetworkManagerNuclearOption.i.Server.Active)
+            if (authoritative)
             {
                 DamageEffects.BlastFrag(yield, blastPos, thrower, PersistentID.None);
                 Explosion.SimulateForce(blastPos, yield);

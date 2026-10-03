@@ -37,6 +37,7 @@ namespace NOInfantry
         private AudioSource audioSource;
         private ViewModel viewModel;
         private Vector2 lastLook;
+        private bool clientSimulated;
 
         private enum Weapon { Rifle, Launcher }
         private Weapon weapon = Weapon.Rifle;
@@ -55,6 +56,7 @@ namespace NOInfantry
 
         private void Update()
         {
+            NetSync.Poll();
             TrackLocalPilot();
             PilotDismounted pilot = cachedPilot;
             if (Controlled == null && InputShim.KeyDown(Plugin.DismountKey.Value.MainKey)) TryDismount();
@@ -143,12 +145,18 @@ namespace NOInfantry
             }
         }
 
+        private static float nextServerWarning;
+
         private static bool CanControl(PilotDismounted pilot)
         {
             if (pilot == null || pilot.disabled || AirbaseServices.HasNewAircraft()) return false;
-            if (!pilot.LocalSim)
+            if (!pilot.LocalSim && !NetSync.ServerHasMod)
             {
-                Plugin.Log.LogWarning("Pilot is simulated by the server; infantry mode is host/single-player only for now.");
+                if (Time.time > nextServerWarning)
+                {
+                    nextServerWarning = Time.time + 30f;
+                    Plugin.Log.LogWarning("This server does not run NO Infantry, so infantry mode is unavailable here.");
+                }
                 return false;
             }
             return SceneSingleton<CameraStateManager>.i != null;
@@ -158,6 +166,10 @@ namespace NOInfantry
         {
             Controlled = pilot;
             CameraStateManager cam = SceneSingleton<CameraStateManager>.i;
+            // Multiplayer client: simulate our own soldier here (the game's pilot network transform stops
+            // overwriting a LocalSim pilot) and stream its state to the server.
+            clientSimulated = !pilot.LocalSim;
+            if (clientSimulated) pilot.SetLocalSim(true);
 
             if (pilot.NetworkisKinematic) pilot.NetworkisKinematic = false;
             pilot.rb.isKinematic = false;
@@ -218,6 +230,8 @@ namespace NOInfantry
             Controlled = null;
             camState.Pilot = null;
             Aiming = false;
+            if (clientSimulated && pilot != null) pilot.SetLocalSim(false);
+            clientSimulated = false;
 
             foreach (Renderer r in hiddenRenderers)
             {
@@ -357,13 +371,17 @@ namespace NOInfantry
             if (VehicleControl.Driven.speed < -0.5f) steer = -steer; // steer like a car when reversing
             VehicleControl.Throttle = throttle;
             VehicleControl.Steering = steer;
-            if (InputShim.Mouse(0)) VehicleControl.FireHeld();
+            bool fire = InputShim.Mouse(0);
+            if (fire) VehicleControl.Local.FireHeld(); // no-op on clients (the server fires)
+            NetSync.SendVehicleInput(Controlled, VehicleControl.Local, fire);
         }
 
         private void EnterVehicle(Unit gv)
         {
             PilotDismounted pilot = Controlled;
-            VehicleControl.Enter(gv, pilot);
+            bool authority = Combat.IsServer;
+            VehicleControl.Local.Enter(gv, pilot.transform.position, authority);
+            if (!authority) NetSync.SendVehicle(pilot, gv, enter: true);
             pilot.SetCollidable(false);
             foreach (Renderer r in hiddenRenderers) if (r != null) r.enabled = false;
             if (viewModel != null) viewModel.gameObject.SetActive(false);
@@ -373,7 +391,8 @@ namespace NOInfantry
         private void LeaveVehicle()
         {
             Unit gv = VehicleControl.Driven;
-            VehicleControl.Exit();
+            if (!VehicleControl.Local.Authority && Controlled != null) NetSync.SendVehicle(Controlled, gv, enter: false);
+            VehicleControl.Local.Exit();
             VehicleControl.Throttle = 0f;
             VehicleControl.Steering = 0f;
             PilotDismounted pilot = Controlled;
@@ -400,6 +419,12 @@ namespace NOInfantry
             pilot.SetCollidable(true);
             foreach (Renderer r in hiddenRenderers) if (r != null) r.enabled = true;
             SelectWeapon(weapon);
+        }
+
+        // The server said no (someone else took it, or it is out of reach): step back out.
+        internal void ServerRefusedVehicle()
+        {
+            if (VehicleControl.Driven != null) LeaveVehicle();
         }
 
         private Vector2 ReadMouse()
@@ -449,16 +474,17 @@ namespace NOInfantry
 
             viewModel?.OnFire(Aiming);
             Vector3 end = origin + dir * Plugin.Range.Value;
-            if (Raycast(origin, dir, pilot, out RaycastHit hit))
+            if (Combat.Raycast(origin, dir, pilot, out RaycastHit hit))
             {
                 end = hit.point;
-                bool water = hit.point.y < Datum.LocalSeaY || hit.collider.sharedMaterial == GameAssets.i.WaterMaterial;
-                bool armor = hit.collider.sharedMaterial != GameAssets.i.terrainMaterial;
-                BorrowedAssets.PlayImpact(hit.point, hit.normal, dir, armor, water);
-                if (!water) ApplyHit(pilot, hit, dir);
+                Combat.PlayImpact(hit, dir);
+                if (!Combat.IsWater(hit)) RegisterHit(pilot, hit, dir);
             }
+            // Damage is the server's job: host/single-player applies it here, clients ask the server.
+            if (Combat.IsPureClient) NetSync.SendShot(pilot, origin, dir);
             Vector3 tracerStart = viewModel != null ? viewModel.Muzzle.position : origin + dir * 1.5f - Vector3.up * 0.1f;
             Tracer.Spawn(tracerStart, end);
+            NetSync.BroadcastLocalShot(tracerStart, end);
         }
 
         private void ThrowGrenade()
@@ -467,38 +493,20 @@ namespace NOInfantry
             Transform eye = SceneSingleton<CameraStateManager>.i.mainCamera.transform;
             grenades--;
             Vector3 dir = (eye.forward + Vector3.up * 0.15f).normalized;
-            Grenade.Throw(pilot, eye.position + eye.forward * 0.5f, pilot.rb.velocity + dir * Plugin.GrenadeThrowSpeed.Value);
+            Vector3 origin = eye.position + eye.forward * 0.5f;
+            Vector3 vel = pilot.rb.velocity + dir * Plugin.GrenadeThrowSpeed.Value;
+            Grenade.Throw(pilot, origin, vel, authoritative: Combat.IsServer); // clients: visual copy, server does damage
+            if (Combat.IsPureClient) NetSync.SendGrenade(pilot, origin, vel);
+            else NetSync.BroadcastLocalGrenade(origin, vel);
         }
 
-        private static bool Raycast(Vector3 origin, Vector3 dir, PilotDismounted self, out RaycastHit best)
-        {
-            best = default;
-            RaycastHit[] results = Physics.RaycastAll(origin, dir, Plugin.Range.Value, ~(int)PhysicsLayers.ExclusionZonesMask, QueryTriggerInteraction.Ignore);
-            float bestDist = float.MaxValue;
-            foreach (RaycastHit h in results)
-            {
-                if (h.collider.transform.IsChildOf(self.transform)) continue;
-                if (h.distance < bestDist)
-                {
-                    bestDist = h.distance;
-                    best = h;
-                }
-            }
-            return bestDist < float.MaxValue;
-        }
-
-        private void ApplyHit(PilotDismounted shooter, RaycastHit hit, Vector3 dir)
+        private void RegisterHit(PilotDismounted shooter, RaycastHit hit, Vector3 dir)
         {
             IDamageable target = hit.collider.GetComponentInParent<IDamageable>();
             if (target == null) return;
 
             Unit unit = target.GetUnit();
-            float muzzle = Plugin.MuzzleVelocity.Value;
-            if (NetworkManagerNuclearOption.i != null && NetworkManagerNuclearOption.i.Server.Active)
-            {
-                // Same path the game uses for confirmed gun hits: penetration vs armor, damage credited to us.
-                DamageEffects.ArmorPenetrate(hit.point - dir * 0.5f, dir * muzzle, muzzle, Plugin.PierceDamage.Value, 0f, shooter.persistentID);
-            }
+            Combat.ApplyRifleDamage(shooter, hit, dir); // no-op on clients
             hits++;
             hitMarkerUntil = Time.time + 0.15f;
             Plugin.Log.LogInfo($"Hit {(unit != null ? unit.unitName : hit.collider.name)} ({hit.collider.name}) at {hit.distance:F0} m, armor {target.GetArmorProperties()?.pierceArmor}");
@@ -509,9 +517,10 @@ namespace NOInfantry
         {
             Rigidbody rb = pilot.rb;
             Unit gv = VehicleControl.Driven;
+            NetSync.SendState(pilot, camState.Yaw);
             if (gv != null)
             {
-                VehicleControl.ApplyInputs();
+                VehicleControl.Local.ApplyInputs();
                 // Ride along (collider is off while seated): ships keep us where we boarded on deck.
                 Vector3 seat = gv is Ship
                     ? gv.transform.TransformPoint(VehicleControl.BoardLocalPos)

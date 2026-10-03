@@ -11,9 +11,18 @@ namespace NOInfantry
         [HarmonyPrefix]
         private static bool LocalFixedUpdatePrefix(PilotDismounted __instance)
         {
-            if (InfantryController.Controlled != __instance) return true;
-            InfantryController.Instance.PhysicsStep(__instance);
-            return false;
+            if (InfantryController.Controlled == __instance)
+            {
+                InfantryController.Instance.PhysicsStep(__instance);
+                return false;
+            }
+            // Server: soldiers driven by remote players follow their owner's streamed state.
+            if (NetSync.Remote.TryGetValue(__instance, out NetSync.RemoteSoldier rs))
+            {
+                NetSync.ServerStep(rs);
+                return false;
+            }
+            return true;
         }
 
         // Friendly/enemy units within 500 m "capture" a landed pilot and destroy it.
@@ -21,7 +30,7 @@ namespace NOInfantry
         [HarmonyPrefix]
         private static bool CapturePrefix(PilotDismounted __instance)
         {
-            return InfantryController.Controlled != __instance;
+            return !NetSync.IsControlled(__instance);
         }
 
         // Pilots have a zero-value unit definition, so AI never engages them. Give only the player-controlled
@@ -30,11 +39,11 @@ namespace NOInfantry
         [HarmonyPostfix]
         private static void AnalyzeTargetPostfix(WeaponStation weaponStation, Unit analyzer, TrackingInfo trackingInfo, float targetDistance, ref OpportunityThreat __result)
         {
-            PilotDismounted p = InfantryController.Controlled;
-            // While seated the pilot's collider is off, so AI would waste fire on it; the vehicle is a target anyway.
-            if (p == null || !Plugin.AiTargetsInfantry.Value || __result.opportunity > 0f || VehicleControl.Driven != null) return;
+            if (!Plugin.AiTargetsInfantry.Value || __result.opportunity > 0f) return;
             if (weaponStation?.WeaponInfo == null || !weaponStation.WeaponInfo.gun) return;
-            if (!trackingInfo.TryGetUnit(out Unit unit) || unit != p || analyzer.NetworkHQ == p.NetworkHQ) return;
+            if (!trackingInfo.TryGetUnit(out Unit unit) || !(unit is PilotDismounted p) || !NetSync.IsControlled(p)) return;
+            // While seated the pilot's collider is off, so AI would waste fire on it; the vehicle is a target anyway.
+            if (NetSync.InVehicle(p) || analyzer.NetworkHQ == p.NetworkHQ) return;
 
             float maxRange = weaponStation.WeaponInfo.targetRequirements.maxRange;
             if (targetDistance < 0f) targetDistance = Vector3.Distance(analyzer.transform.position, p.transform.position);
@@ -60,8 +69,13 @@ namespace NOInfantry
         [HarmonyPrefix]
         private static bool AnyNearAirbasePrefix(Vector3 fromPosition, ref Airbase airbase, ref bool __result)
         {
-            PilotDismounted p = InfantryController.Controlled;
-            if (AirbaseServices.BypassAirbasePatch || p == null || (fromPosition - p.transform.position).sqrMagnitude > 1f) return true;
+            if (AirbaseServices.BypassAirbasePatch) return true;
+            bool isSoldier = false;
+            foreach (PilotDismounted p in NetSync.AllControlled())
+            {
+                if ((fromPosition - p.transform.position).sqrMagnitude <= 1f) { isSoldier = true; break; }
+            }
+            if (!isSoldier) return true;
             airbase = null;
             __result = false;
             return false;

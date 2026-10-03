@@ -53,7 +53,13 @@ namespace NOInfantry
 
         internal static void ReturnPilot(PilotDismounted pilot)
         {
-            if (pilot == null || NetworkManagerNuclearOption.i == null || !NetworkManagerNuclearOption.i.Server.Active) return;
+            if (pilot == null || NetworkManagerNuclearOption.i == null) return;
+            if (Combat.IsPureClient)
+            {
+                NetSync.SendReturn(pilot); // the server decides (it checks the airbase itself)
+                return;
+            }
+            if (!Combat.IsServer) return;
             if (NearFriendlyAirbase(pilot) == null) return; // left in the field: stays as a pilot that can be rescued
             pilot.NetworkunitState = Unit.UnitState.Returned;
             pilot.Networkdisabled = true;

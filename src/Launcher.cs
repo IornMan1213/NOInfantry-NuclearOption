@@ -168,10 +168,8 @@ namespace NOInfantry
             if (t == null || t.disabled || Time.time < nextSpot || self.NetworkHQ == null) return;
             nextSpot = Time.time + 0.5f;
             if (!HasLineOfSight(cam.transform.position, t, self)) return;
-            if (NetworkManagerNuclearOption.i != null && NetworkManagerNuclearOption.i.Server.Active)
-            {
-                self.NetworkHQ.RpcUpdateTrackingInfo(t.persistentID);
-            }
+            if (Combat.IsServer) self.NetworkHQ.RpcUpdateTrackingInfo(t.persistentID);
+            else self.NetworkHQ.CmdUpdateTrackingInfo(t.persistentID); // client: the game's own spotting RPC
         }
 
         private void Fire(PilotDismounted self, Camera cam)
@@ -184,17 +182,39 @@ namespace NOInfantry
                 Plugin.Log.LogWarning($"No {(air ? "anti-air" : "anti-surface")} missile available.");
                 return;
             }
-            if (NetworkManagerNuclearOption.i == null || !NetworkManagerNuclearOption.i.Server.Active)
-            {
-                Plugin.Log.LogWarning("Launcher needs host/single-player.");
-                return;
-            }
-            self.NetworkHQ?.RpcUpdateTrackingInfo(target.persistentID);
             spotTarget = target;
             spotUntil = Time.time + 30f;
             Transform eye = cam.transform;
             Vector3 pos = eye.position + eye.forward * 1.5f + eye.right * 0.2f;
             Vector3 dir = (eye.forward + Vector3.up * (air ? 0.08f : 0.03f)).normalized;
+            if (Combat.IsServer)
+            {
+                SpawnFor(self, target, pos, dir);
+            }
+            else if (NetSync.ServerHasMod)
+            {
+                self.NetworkHQ?.CmdUpdateTrackingInfo(target.persistentID);
+                NetSync.SendLaunch(self, target, pos, dir);
+                Plugin.Log.LogInfo($"Launch request sent for {target.unitName}");
+            }
+            else
+            {
+                Plugin.Log.LogWarning("Launcher: this server doesn't run NO Infantry.");
+                return;
+            }
+            Ammo--;
+            nextShotTime = Time.time + Plugin.LauncherReload.Value;
+            ClearLock();
+        }
+
+        // Server/host: spawn the game's own missile for `self` at `target`.
+        internal static Missile SpawnFor(PilotDismounted self, Unit target, Vector3 pos, Vector3 dir)
+        {
+            FindMissiles();
+            bool air = target is Aircraft;
+            GameObject prefab = air ? aaMissile : atMissile;
+            if (prefab == null) return null;
+            self.NetworkHQ?.RpcUpdateTrackingInfo(target.persistentID);
             Vector3 vel = self.rb.velocity + dir * Plugin.LauncherEjectSpeed.Value;
             Missile m = NetworkSceneSingleton<Spawner>.i.SpawnMissile(prefab, pos, Quaternion.LookRotation(dir), vel, target, self);
             LastLaunched = m;
@@ -205,10 +225,8 @@ namespace NOInfantry
                 // a hit, so arm the game's own proximity fuse on the target (detonates at closest approach).
                 if (!air) m.SetProxyFuse(target.transform, target.rb);
             }
-            Ammo--;
-            nextShotTime = Time.time + Plugin.LauncherReload.Value;
-            Plugin.Log.LogInfo($"Launched {m?.definition?.unitName} at {target.unitName} ({Vector3.Distance(pos, target.transform.position):F0} m)");
-            ClearLock();
+            Plugin.Log.LogInfo($"Launched {m?.definition?.unitName} at {target.unitName} ({Vector3.Distance(pos, target.transform.position):F0} m) for {self.unitName}");
+            return m;
         }
 
         private static Unit FindTarget(PilotDismounted self, Camera cam, float cone)
