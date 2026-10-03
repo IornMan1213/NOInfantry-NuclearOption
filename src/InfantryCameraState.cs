@@ -38,7 +38,7 @@ namespace NOInfantry
                 return;
             }
 
-            Vector3 eye = Pilot.transform.position + Vector3.up * Plugin.EyeHeight.Value;
+            Vector3 eye = Pilot.transform.position + Vector3.up * InfantryController.Instance.EyeHeightNow;
             cam.cameraPivot.position = eye;
             cam.cameraPivot.rotation = Quaternion.identity;
             cam.transform.SetPositionAndRotation(eye, look);

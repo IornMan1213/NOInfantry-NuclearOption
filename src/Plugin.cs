@@ -34,6 +34,9 @@ namespace NOInfantry
         internal static ConfigEntry<float> AiEngageRange;
         internal static ConfigEntry<float> AiInfantryPriority;
         internal static ConfigEntry<KeyCode> BoardKey;
+        internal static ConfigEntry<KeyCode> CrouchKey;
+        internal static ConfigEntry<KeyCode> ProneKey;
+        internal static ConfigEntry<float> FootstepVolume;
 
         // Launcher
         internal static ConfigEntry<int> LauncherAmmo;
@@ -115,6 +118,9 @@ namespace NOInfantry
             AiEngageRange = Config.Bind("AI", "EngageRange", 1200f, "Max metres at which AI guns will shoot at you");
             AiInfantryPriority = Config.Bind("AI", "Priority", 0.3f, "Target value vs other units (higher = AI prefers you over vehicles)");
 
+            CrouchKey = Config.Bind("Controls", "CrouchKey", KeyCode.C, "Toggle crouch (lower, quieter, steadier aim)");
+            ProneKey = Config.Bind("Controls", "ProneKey", KeyCode.Z, "Toggle prone (lowest, slowest, steadiest aim)");
+            FootstepVolume = Config.Bind("Controls", "FootstepVolume", 0.35f, "Volume of your own footsteps (0 to mute)");
             BoardKey = Config.Bind("Controls", "RequestAircraftKey", KeyCode.B, "At a friendly airbase: open the aircraft selection menu");
 
             LauncherAmmo = Config.Bind("Launcher", "Rockets", 4, "Missiles carried (2 to select the launcher)");

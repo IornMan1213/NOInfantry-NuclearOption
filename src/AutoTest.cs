@@ -268,9 +268,31 @@ namespace NOInfantry
             yield return new WaitForSecondsRealtime(0.6f);
             Shot("pose_reload");
             yield return new WaitForSecondsRealtime(Plugin.ReloadTime.Value);
+
+            // Stances: lower eye, slower movement.
+            yield return StanceCheck(KeyCode.C, InfantryController.Stance.Crouch, "crouch");
+            yield return StanceCheck(KeyCode.Z, InfantryController.Stance.Prone, "prone");
+            InputShim.Press(KeyCode.Space); // stand up
+            yield return new WaitForSecondsRealtime(0.8f);
+            Result("stand up", InfantryController.Instance.CurrentStance == InfantryController.Stance.Stand, "jump key stands you up");
         }
 
         private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
+
+        private IEnumerator StanceCheck(KeyCode key, InfantryController.Stance expected, string name)
+        {
+            InputShim.Press(key);
+            yield return new WaitForSecondsRealtime(0.8f);
+            float eye = InfantryController.Instance.EyeHeightNow;
+            Vector3 start = soldier.transform.position;
+            InputShim.Hold(KeyCode.W, true);
+            yield return new WaitForSecondsRealtime(1.5f);
+            InputShim.Hold(KeyCode.W, false);
+            float moved = Vector3.Distance(Flat(start), Flat(soldier.transform.position));
+            Shot("pose_" + name);
+            bool ok = InfantryController.Instance.CurrentStance == expected && eye < Plugin.EyeHeight.Value - 0.3f && moved < Plugin.WalkSpeed.Value * 1.5f * 0.7f;
+            Result(name, ok, $"stance {InfantryController.Instance.CurrentStance}, eye {eye:F2} m (standing {Plugin.EyeHeight.Value:F2}), moved {moved:F1} m in 1.5 s");
+        }
 
         private IEnumerator Rifle()
         {

@@ -40,6 +40,18 @@ namespace NOInfantry
         private bool clientSimulated;
 
         private enum Weapon { Rifle, Launcher }
+
+        internal enum Stance { Stand, Crouch, Prone }
+        internal Stance CurrentStance { get; private set; }
+        private float eyeOffset;
+        private Footsteps footsteps;
+
+        // Camera height above the body origin, eased between stances.
+        internal float EyeHeightNow => Plugin.EyeHeight.Value + eyeOffset;
+
+        private static float StanceEyeOffset(Stance s) => s == Stance.Crouch ? -0.55f : s == Stance.Prone ? -1.05f : 0f;
+        private static float StanceSpeed(Stance s) => s == Stance.Crouch ? 0.55f : s == Stance.Prone ? 0.25f : 1f;
+        private static float StanceSpread(Stance s) => s == Stance.Crouch ? 0.7f : s == Stance.Prone ? 0.45f : 1f;
         private Weapon weapon = Weapon.Rifle;
         private Launcher launcher;
         private Airbase nearbyAirbase;
@@ -105,6 +117,14 @@ namespace NOInfantry
             {
                 KeepCamera();
                 ReadInput();
+                eyeOffset = Mathf.MoveTowards(eyeOffset, StanceEyeOffset(CurrentStance), Time.deltaTime * 2.5f);
+                if (VehicleControl.Driven == null && footsteps != null)
+                {
+                    float hspeed = new Vector2(Controlled.rb.velocity.x, Controlled.rb.velocity.z).magnitude;
+                    float stride = CurrentStance == Stance.Stand ? (sprint ? 1.7f : 1.25f) : CurrentStance == Stance.Crouch ? 0.9f : 0.7f;
+                    float loud = CurrentStance == Stance.Stand ? 1f : CurrentStance == Stance.Crouch ? 0.55f : 0.35f;
+                    footsteps.Tick(grounded, hspeed, stride, loud);
+                }
                 if (viewModel != null && VehicleControl.Driven == null && weapon == Weapon.Rifle)
                 {
                     float speed = new Vector2(Controlled.rb.velocity.x, Controlled.rb.velocity.z).magnitude;
@@ -231,6 +251,9 @@ namespace NOInfantry
             ammo = Plugin.MagazineSize.Value;
             reloadDoneTime = 0f;
             grenades = Plugin.GrenadeCount.Value;
+            CurrentStance = Stance.Stand;
+            eyeOffset = 0f;
+            if (footsteps == null) footsteps = new Footsteps(gameObject);
             lastHp = hitPointsRef(pilot);
             BorrowedAssets.Find();
             SetupAudio();
@@ -342,8 +365,15 @@ namespace NOInfantry
             if (InputShim.Key(KeyCode.D)) moveInput.x += 1f;
             if (InputShim.Key(KeyCode.A)) moveInput.x -= 1f;
             moveInput = Vector2.ClampMagnitude(moveInput, 1f);
+            if (InputShim.KeyDown(Plugin.CrouchKey.Value)) CurrentStance = CurrentStance == Stance.Crouch ? Stance.Stand : Stance.Crouch;
+            if (InputShim.KeyDown(Plugin.ProneKey.Value)) CurrentStance = CurrentStance == Stance.Prone ? Stance.Stand : Stance.Prone;
             sprint = InputShim.Key(KeyCode.LeftShift) && moveInput.y > 0f;
-            if (InputShim.KeyDown(KeyCode.Space)) jumpQueued = true;
+            if (sprint && CurrentStance != Stance.Stand) CurrentStance = Stance.Stand; // sprinting stands you up
+            if (InputShim.KeyDown(KeyCode.Space))
+            {
+                if (CurrentStance == Stance.Stand) jumpQueued = true;
+                else CurrentStance = Stance.Stand; // jump key gets you up first
+            }
 
             // Weapons
             if (InputShim.KeyDown(KeyCode.Alpha1)) SelectWeapon(Weapon.Rifle);
@@ -483,7 +513,7 @@ namespace NOInfantry
             ammo--;
             shotsFired++;
 
-            float spread = Plugin.SpreadDegrees.Value * (Aiming ? 0.5f : 1f) * (moveInput.sqrMagnitude > 0f ? 2f : 1f);
+            float spread = Plugin.SpreadDegrees.Value * (Aiming ? 0.5f : 1f) * (moveInput.sqrMagnitude > 0f ? 2f : 1f) * StanceSpread(CurrentStance);
             Vector3 dir = Quaternion.Euler(Random.Range(-spread, spread), Random.Range(-spread, spread), 0f) * eye.transform.forward;
             Vector3 origin = eye.transform.position;
 
@@ -571,6 +601,7 @@ namespace NOInfantry
 
             Quaternion yaw = Quaternion.Euler(0f, camState.Yaw, 0f);
             float speed = sprint ? Plugin.SprintSpeed.Value : Plugin.WalkSpeed.Value;
+            speed *= StanceSpeed(CurrentStance);
             if (Aiming) speed *= 0.5f;
             Vector3 wishVel = yaw * new Vector3(moveInput.x, 0f, moveInput.y) * speed + groundVel;
 
@@ -716,7 +747,11 @@ namespace NOInfantry
             GUI.Label(new Rect(Screen.width - 520f, Screen.height - 84f, 500f, 24f), weaponText);
             GUI.Label(new Rect(Screen.width - 520f, Screen.height - 60f, 500f, 24f), $"GRENADES  {grenades}    [1] rifle  [2] launcher");
             string help = weapon == Weapon.Launcher ? "RMB lock   LMB fire" : "RMB aim   R reload";
-            GUI.Label(new Rect(20f, Screen.height - 60f, 600f, 24f), $"INFANTRY  {help}   G grenade   [{Plugin.ToggleKey.Value}] exit");
+            if (CurrentStance != Stance.Stand)
+            {
+                GUI.Label(new Rect(20f, Screen.height - 132f, 200f, 24f), CurrentStance == Stance.Crouch ? "CROUCHED" : "PRONE");
+            }
+            GUI.Label(new Rect(20f, Screen.height - 60f, 700f, 24f), $"INFANTRY  {help}   G grenade   [{Plugin.CrouchKey.Value}] crouch  [{Plugin.ProneKey.Value}] prone   [{Plugin.ToggleKey.Value}] exit");
             GUI.color = prev;
         }
     }
