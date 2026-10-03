@@ -22,12 +22,15 @@ take off again.
 | Any time on foot | **F7** | switch between first person and the game camera |
 
 ### On foot
-- WASD move, Shift sprint, Space jump.
+- WASD move, Shift sprint, Space jump, **C** crouch, **Z** prone (lower, slower, steadier aim, quieter footsteps).
 - **1** rifle: LMB fire, RMB aim down the iron sights, R reload.
 - **2** launcher: hold RMB on an enemy near the reticle to lock, then LMB to fire. It uses an anti-air
   missile against aircraft and an anti-surface missile against vehicles and ships.
 - **G** frag grenade.
-- Enemy guns will shoot back (configurable).
+- **H** call a fireteam: AI riflemen who follow you in a wedge, keep up when you run, and engage enemy soldiers
+  and soft vehicles they can see (they won't shoot through friendlies).
+- **J** send an enemy patrol at you (sandbox). Optional automatic patrols: `Squads -> AutoEnemyPatrols`.
+- Enemy guns, vehicles and AI soldiers shoot back (all configurable).
 
 ### In a vehicle or ship
 WASD drive, mouse aims the turrets (the green mark shows where the barrel actually points), LMB fires the guns,
@@ -68,14 +71,15 @@ Results go to `BepInEx/NOInfantry_autotest.txt` and screenshots to `BepInEx/NOIn
 It covers: spawn on foot, walk/sprint/jump, rifle hits, grenade, launcher vs ground and air targets
 (lock, launch, damage), driving and firing a ground vehicle, a ship's helm (throttle, steering direction,
 leaving the helm), the airbase aircraft menu, the hand-off when a new aircraft spawns, and F8 dismount.
-Current result: 20/20 passing (v0.5.0).
+Current result: 27/27 passing (v0.6.0), including stances and an AI firefight.
 
 Multiplayer self-test (two instances on one PC over UDP; run the host first):
 ```
 NuclearOption.exe -autoHost -socket UDP -port 7777 -state Multiplayer -mission "Free Flight - Ignus Archipelago" -noiAutotest -noiRole host -screen-fullscreen 0
 NuclearOption.exe -autoConnect 127.0.0.1 -socket UDP -port 7777 -noiAutotest -noiRole client -screen-fullscreen 0
 ```
-Reports: `BepInEx/NOInfantry_mptest_host.txt` and `..._client.txt`. Current result: client 17/17, host 9/9.
+Reports: `BepInEx/NOInfantry_mptest_host.txt` and `..._client.txt`. The client starts like a player
+(aircraft at the airbase, then F8). Current result: client 19/19, host 10/10 (v0.6.0).
 
 ## Build
 `dotnet build -c Release` (edit `NuclearOptionPath` in `NOInfantry.csproj`). The build copies the DLL and

@@ -139,3 +139,21 @@ We hijack it rather than spawning a new unit type (no prefab/network registratio
   5. Client launch point sat inside the lagging server copy => missile detonated on its own soldier. Server now launches
      from its copy (eye + 3 m along the aim).
 - Results: MP client 17/17, host 9/9; SP 20/20.
+
+## 2026-10-02 v0.6 stances, AI squads, MP hardening
+- Crouch/prone: eye offset eased, speed x0.55/x0.25, spread x0.7/x0.45, AI accuracy vs you x1.3/x1.8. Procedural footsteps.
+- SoldierMotor: the landed-pilot hover physics shared by player and AI.
+- AI squads (server/host): PilotDismounted via Spawner.SpawnPilot, registered before the first physics step so the game's
+  landed logic never runs; LocalFixedUpdate prefix -> AiSquads.Step. Fireteam wedge follows leader; patrols advance and
+  hold at ~90 m when engaged. Bursts 3-5, 0.6-1.4 s reaction, spread grows with range/target speed. Check-fire with a
+  0.3 m spherecast lane + per-round friendly test; sidestep after 3 blocked shots (first version: 44 friendly hits).
+- MP root causes found with the two-instance harness:
+  * Launcher missile detonated at once: (a) physical bump with the launching soldier = impact damage -> IgnoreCollision
+    missile vs soldier colliders; (b) "underwater" detonation because the soldier itself had fallen into the sea.
+  * The soldier fell because the client's copy of a never-moving pilot was stale (client local origin, ~425 m up) when the
+    client took LocalSim. NoiCorrect: on first state, if client and server copies differ by > 5 m the server sends its
+    authoritative position and ignores states for 0.6 s.
+  * Harness: an all-layers raycast at an airbase hit an invisible collider ~400 m up; coastal airbases have sea 60 m out.
+    The MP client now starts like a player (aircraft at the airbase, then F8), which exercises the real ejection path.
+  * Unity null-equality: `a.Leader == me` is true for leaderless patrols once `me` is destroyed -> use (object) compares.
+- Results: SP 27/27; MP client 19/19, host 10/10 on two consecutive runs.
