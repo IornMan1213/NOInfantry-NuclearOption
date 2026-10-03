@@ -90,6 +90,7 @@ namespace NOInfantry
             yield return Step("ground-vehicle", GroundVehicleTest());
             yield return Step("ship", ShipTest());
             yield return Step("airbase", AirbaseTest());
+            yield return Step("squads", SquadTest());
             Finish();
         }
 
@@ -540,6 +541,54 @@ namespace NOInfantry
             yield return new WaitForSecondsRealtime(1f);
             float afterExit = soldier.transform.position.y - Datum.LocalSeaY;
             Result("ship exit", VehicleControl.Driven == null && afterExit > 1f, $"soldier {afterExit:F1} m above sea after leaving the helm");
+        }
+
+        private IEnumerator SquadTest()
+        {
+            PilotDismounted me = InfantryController.Controlled;
+            if (me == null) { Result("squads", false, "no soldier under control"); yield break; }
+            InputShim.Scripted = true;
+            InputShim.Press(Plugin.FireteamKey.Value);
+            yield return new WaitForSecondsRealtime(3f);
+            int team = AiSquads.AliveFollowing(me);
+            Result("fireteam spawn", team == Plugin.SquadSize.Value, $"{team} riflemen following");
+            Shot("fireteam");
+
+            // Walk away and check they keep up.
+            InfantryController.Instance.AimAt(me.transform.position + Flat(me.transform.forward) * 50f + Vector3.up * 1.5f);
+            InputShim.Hold(KeyCode.W, true);
+            yield return new WaitForSecondsRealtime(6f);
+            InputShim.ReleaseAll();
+            yield return new WaitForSecondsRealtime(2f);
+            float avg = AiSquads.All.Values.Where(a => a.Leader == me && a.Pilot != null && !a.Pilot.disabled)
+                .Select(a => Vector3.Distance(a.Pilot.transform.position, me.transform.position)).DefaultIfEmpty(999f).Average();
+            Result("fireteam follows", avg < 20f, $"average distance to leader {avg:F1} m after a 6 s walk");
+            Shot("fireteam_follow");
+
+            // Enemy patrol close enough for a quick firefight (setting restored afterwards).
+            float savedDist = Plugin.PatrolDistance.Value;
+            Plugin.PatrolDistance.Value = 220f;
+            int before = AiSquads.All.Count;
+            int shots0 = AiSquads.ShotsFired, hits0 = AiSquads.HitsLanded;
+            InputShim.Press(Plugin.PatrolKey.Value);
+            yield return new WaitForSecondsRealtime(3f);
+            Plugin.PatrolDistance.Value = savedDist;
+            List<PilotDismounted> patrol = AiSquads.All.Values.Where(a => a.IsPatrol).Select(a => a.Pilot).ToList();
+            Result("patrol spawn", patrol.Count == Plugin.PatrolSize.Value, $"{patrol.Count} enemy soldiers {Plugin.PatrolDistance.Value} m class distance");
+
+            // Let them fight; prone to keep our own soldier alive.
+            InputShim.Press(Plugin.ProneKey.Value);
+            float end = Time.realtimeSinceStartup + 75f;
+            bool shot = false;
+            while (Time.realtimeSinceStartup < end && patrol.Any(p => p != null && !p.disabled))
+            {
+                if (!shot && AiSquads.ShotsFired - shots0 > 20) { Shot("firefight"); shot = true; }
+                yield return new WaitForSecondsRealtime(0.5f);
+            }
+            int patrolDown = patrol.Count(p => p == null || p.disabled);
+            int teamLeft = AiSquads.AliveFollowing(me);
+            Result("firefight", AiSquads.ShotsFired - shots0 > 0 && AiSquads.HitsLanded - hits0 > 0 && patrolDown > 0,
+                $"AI shots {AiSquads.ShotsFired - shots0}, hits {AiSquads.HitsLanded - hits0}, patrol down {patrolDown}/{patrol.Count}, fireteam left {teamLeft}, me alive {me != null && !me.disabled}");
         }
 
         private IEnumerator AirbaseTest()

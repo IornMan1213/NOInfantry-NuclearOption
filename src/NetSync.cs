@@ -21,6 +21,8 @@ namespace NOInfantry
     public struct NoiTurretAim { public uint Vehicle; public GlobalPosition Aim; public bool Active; }
     // Automated multiplayer test only: a client asks the host to spawn a test unit (ignored unless the host runs -noiAutotest).
     public struct NoiTest { public byte Kind; public string Name; public GlobalPosition Pos; public Vector3 Dir; }
+    // Client asks the server for AI: Kind 1 = fireteam following me, 2 = enemy patrol advancing on me.
+    public struct NoiSquad { public uint Pilot; public byte Kind; }
 
     // Multiplayer for NO Infantry. Every player needs the mod; the server must have it for clients to use it.
     //
@@ -97,11 +99,15 @@ namespace NOInfantry
             p != null && Combat.IsServer && p.Networkplayer != null && p.Networkplayer.Owner != null
             && moddedPlayers.Contains(p.Networkplayer.Owner);
 
-        internal static bool IsProtected(PilotDismounted p) => IsControlled(p) || OwnedByModdedPlayer(p);
+        internal static bool IsProtected(PilotDismounted p) => IsControlled(p) || OwnedByModdedPlayer(p) || AiSquads.IsAi(p);
+
+        // Any soldier fighting on foot: a player's (local or remote) or an AI rifleman.
+        internal static bool IsProtectedOrAi(PilotDismounted p) => IsControlled(p) || AiSquads.IsAi(p);
 
         internal static IEnumerable<PilotDismounted> AllProtected()
         {
             foreach (PilotDismounted p in AllControlled()) yield return p;
+            foreach (PilotDismounted p in AiSquads.All.Keys) if (p != null) yield return p;
             if (moddedPlayers.Count == 0) yield break;
             foreach (Unit u in UnitRegistry.allUnits)
             {
@@ -157,7 +163,10 @@ namespace NOInfantry
             Writer<NoiTest>.Write = (w, m) => { w.WriteByte(m.Kind); w.Write(m.Name); w.Write(m.Pos); w.Write(m.Dir); };
             Reader<NoiTest>.Read = r => new NoiTest { Kind = r.ReadByte(), Name = r.Read<string>(), Pos = r.Read<GlobalPosition>(), Dir = r.Read<Vector3>() };
 
-            Register<NoiReturn>(); Register<NoiFx>(); Register<NoiTurretAim>(); Register<NoiTest>();
+            Writer<NoiSquad>.Write = (w, m) => { w.WriteUInt32(m.Pilot); w.WriteByte(m.Kind); };
+            Reader<NoiSquad>.Read = r => new NoiSquad { Pilot = r.ReadUInt32(), Kind = r.ReadByte() };
+
+            Register<NoiReturn>(); Register<NoiFx>(); Register<NoiTurretAim>(); Register<NoiTest>(); Register<NoiSquad>();
         }
 
         private static void Register<T>()
@@ -190,6 +199,7 @@ namespace NOInfantry
                 serverHandler.RegisterHandler<NoiVehicle>(OnVehicle, false);
                 serverHandler.RegisterHandler<NoiVehicleInput>(OnVehicleInput, false);
                 serverHandler.RegisterHandler<NoiReturn>(OnReturn, false);
+                serverHandler.RegisterHandler<NoiSquad>(OnSquad, false);
                 if (AutoTest.Requested) serverHandler.RegisterHandler<NoiTest>((pl, m) => TestRequest?.Invoke(pl, m), false);
                 Plugin.Log.LogInfo("Multiplayer: server handlers registered");
             }
@@ -218,7 +228,12 @@ namespace NOInfantry
                 Plugin.Log.LogInfo("Multiplayer: hello sent to server");
             }
 
-            if (Combat.IsServer) ServerTick();
+            if (Combat.IsServer)
+            {
+                ServerTick();
+                AiSquads.Tick();
+                SquadCommands.AutoPatrols();
+            }
             else ExpireVisualDrivers();
         }
 
@@ -263,6 +278,8 @@ namespace NOInfantry
         }
 
         internal static void SendReturn(PilotDismounted p) => SendToServer(new NoiReturn { Pilot = NetIdOf(p) });
+
+        internal static void SendSquad(PilotDismounted p, byte kind) => SendToServer(new NoiSquad { Pilot = NetIdOf(p), Kind = kind });
 
         internal static void SendTest(byte kind, string name, Vector3 pos, Vector3 dir) =>
             SendToServer(new NoiTest { Kind = kind, Name = name, Pos = pos.ToGlobalPosition(), Dir = dir });
@@ -454,6 +471,12 @@ namespace NOInfantry
             rs.Driver.AimUnit = msg.AimUnit != 0 && NetworkManagerNuclearOption.i.Server.World.TryGetIdentity(msg.AimUnit, out NetworkIdentity aid)
                 ? aid.GetComponent<Unit>() : null;
             rs.FireHeld = msg.Fire;
+        }
+
+        private static void OnSquad(INetworkPlayer sender, NoiSquad msg)
+        {
+            if (!Plugin.AllowClientSquads.Value || !TryGetOwnedPilot(sender, msg.Pilot, out PilotDismounted pilot)) return;
+            SquadCommands.Execute(pilot, msg.Kind);
         }
 
         private static void OnReturn(INetworkPlayer sender, NoiReturn msg)

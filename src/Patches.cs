@@ -16,6 +16,12 @@ namespace NOInfantry
                 InfantryController.Instance.PhysicsStep(__instance);
                 return false;
             }
+            // AI riflemen (server/host).
+            if (AiSquads.All.TryGetValue(__instance, out AiSoldier ai))
+            {
+                AiSquads.Step(ai);
+                return false;
+            }
             // Server: soldiers driven by remote players follow their owner's streamed state.
             if (NetSync.Remote.TryGetValue(__instance, out NetSync.RemoteSoldier rs))
             {
@@ -41,7 +47,7 @@ namespace NOInfantry
         {
             if (!Plugin.AiTargetsInfantry.Value || __result.opportunity > 0f) return;
             if (weaponStation?.WeaponInfo == null || !weaponStation.WeaponInfo.gun) return;
-            if (!trackingInfo.TryGetUnit(out Unit unit) || !(unit is PilotDismounted p) || !NetSync.IsControlled(p)) return;
+            if (!trackingInfo.TryGetUnit(out Unit unit) || !(unit is PilotDismounted p) || !NetSync.IsProtectedOrAi(p)) return;
             // While seated the pilot's collider is off, so AI would waste fire on it; the vehicle is a target anyway.
             if (NetSync.InVehicle(p) || analyzer.NetworkHQ == p.NetworkHQ) return;
 

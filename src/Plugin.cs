@@ -38,6 +38,18 @@ namespace NOInfantry
         internal static ConfigEntry<KeyCode> ProneKey;
         internal static ConfigEntry<float> FootstepVolume;
 
+        // AI squads
+        internal static ConfigEntry<KeyCode> FireteamKey;
+        internal static ConfigEntry<KeyCode> PatrolKey;
+        internal static ConfigEntry<int> SquadSize;
+        internal static ConfigEntry<int> PatrolSize;
+        internal static ConfigEntry<float> AiSoldierRange;
+        internal static ConfigEntry<float> AiSpreadDegrees;
+        internal static ConfigEntry<bool> EnemyPatrols;
+        internal static ConfigEntry<float> PatrolInterval;
+        internal static ConfigEntry<float> PatrolDistance;
+        internal static ConfigEntry<bool> AllowClientSquads;
+
         // Launcher
         internal static ConfigEntry<int> LauncherAmmo;
         internal static ConfigEntry<float> LauncherReload;
@@ -121,6 +133,16 @@ namespace NOInfantry
             CrouchKey = Config.Bind("Controls", "CrouchKey", KeyCode.C, "Toggle crouch (lower, quieter, steadier aim)");
             ProneKey = Config.Bind("Controls", "ProneKey", KeyCode.Z, "Toggle prone (lowest, slowest, steadiest aim)");
             FootstepVolume = Config.Bind("Controls", "FootstepVolume", 0.35f, "Volume of your own footsteps (0 to mute)");
+            FireteamKey = Config.Bind("Squads", "FireteamKey", KeyCode.H, "Call AI riflemen who follow you and engage enemies");
+            PatrolKey = Config.Bind("Squads", "PatrolKey", KeyCode.J, "Send an enemy patrol at you (practice / sandbox)");
+            SquadSize = Config.Bind("Squads", "FireteamSize", 4, "Riflemen in your fireteam");
+            PatrolSize = Config.Bind("Squads", "PatrolSize", 5, "Soldiers per enemy patrol");
+            AiSoldierRange = Config.Bind("Squads", "EngageRange", 350f, "Metres at which AI riflemen open fire");
+            AiSpreadDegrees = Config.Bind("Squads", "Spread", 2.2f, "AI rifle spread in degrees (grows with distance); lower = deadlier");
+            EnemyPatrols = Config.Bind("Squads", "AutoEnemyPatrols", false, "Periodically send enemy patrols at soldiers on foot");
+            PatrolInterval = Config.Bind("Squads", "AutoPatrolInterval", 150f, "Seconds between automatic enemy patrols");
+            PatrolDistance = Config.Bind("Squads", "PatrolSpawnDistance", 600f, "How far away patrols appear");
+            AllowClientSquads = Config.Bind("Squads", "AllowClientRequests", true, "Server: let clients call fireteams/patrols");
             BoardKey = Config.Bind("Controls", "RequestAircraftKey", KeyCode.B, "At a friendly airbase: open the aircraft selection menu");
 
             LauncherAmmo = Config.Bind("Launcher", "Rockets", 4, "Missiles carried (2 to select the launcher)");

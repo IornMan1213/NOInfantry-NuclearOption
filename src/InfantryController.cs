@@ -382,6 +382,10 @@ namespace NOInfantry
             if (scroll != 0f) SelectWeapon(weapon == Weapon.Rifle ? Weapon.Launcher : Weapon.Rifle);
             if (InputShim.KeyDown(KeyCode.G) && grenades > 0) ThrowGrenade();
 
+            // AI squads
+            if (InputShim.KeyDown(Plugin.FireteamKey.Value)) SquadCommands.Request(Controlled, 1);
+            if (InputShim.KeyDown(Plugin.PatrolKey.Value)) SquadCommands.Request(Controlled, 2);
+
             // Ground -> air
             if (InputShim.KeyDown(Plugin.BoardKey.Value) && nearbyAirbase != null) AirbaseServices.OpenAircraftMenu(nearbyAirbase);
 
@@ -584,54 +588,11 @@ namespace NOInfantry
                 rb.angularVelocity = Vector3.zero;
                 return;
             }
-            Vector3 pos = pilot.transform.position;
-            bool inWater = pos.GlobalY() < 0f;
-
-            rb.drag = 0f;
-            rb.angularVelocity = Vector3.zero;
-            rb.MoveRotation(Quaternion.Euler(0f, camState.Yaw, 0f));
-
-            Vector3 groundVel = Vector3.zero;
-            grounded = Physics.Linecast(pos, pos - Vector3.up * (HoverHeight + 0.4f), out RaycastHit hit, ~(int)PhysicsLayers.ExclusionZonesMask)
-                       && !hit.collider.transform.IsChildOf(pilot.transform);
-            if (grounded && hit.collider.attachedRigidbody != null)
-            {
-                groundVel = hit.collider.attachedRigidbody.GetPointVelocity(hit.point);
-            }
-
-            Quaternion yaw = Quaternion.Euler(0f, camState.Yaw, 0f);
             float speed = sprint ? Plugin.SprintSpeed.Value : Plugin.WalkSpeed.Value;
             speed *= StanceSpeed(CurrentStance);
             if (Aiming) speed *= 0.5f;
-            Vector3 wishVel = yaw * new Vector3(moveInput.x, 0f, moveInput.y) * speed + groundVel;
-
-            Vector3 vel = rb.velocity;
-            Vector3 horiz = new Vector3(vel.x - wishVel.x, 0f, vel.z - wishVel.z);
-
-            if (inWater)
-            {
-                rb.AddForce(Vector3.up * rb.mass * 25f * Mathf.Clamp01(Datum.LocalSeaY - pos.y));
-                rb.AddForce(-horiz * rb.mass * 2f - Vector3.up * vel.y * rb.mass);
-            }
-            else if (grounded)
-            {
-                // Spring to hover height (same constants as the game) plus strong horizontal control.
-                float relVy = vel.y - groundVel.y;
-                rb.AddForce(Vector3.up * (HoverHeight - hit.distance - relVy * 0.2f) * rb.mass * 25f - Vector3.up * relVy * rb.mass * 2f);
-                rb.AddForce(-horiz * rb.mass * 12f);
-                if (jumpQueued)
-                {
-                    rb.velocity = new Vector3(vel.x, groundVel.y + Plugin.JumpSpeed.Value, vel.z);
-                }
-                if (pilot.animationState != PilotDismounted.PilotState.landing)
-                {
-                    pilot.SetPilotState(PilotDismounted.PilotState.landing);
-                }
-            }
-            else
-            {
-                rb.AddForce(-horiz * rb.mass * 1.5f); // a little air control
-            }
+            Vector3 wish = Quaternion.Euler(0f, camState.Yaw, 0f) * new Vector3(moveInput.x, 0f, moveInput.y) * speed;
+            grounded = SoldierMotor.Step(pilot, camState.Yaw, wish, jumpQueued);
             jumpQueued = false;
         }
 
@@ -747,11 +708,13 @@ namespace NOInfantry
             GUI.Label(new Rect(Screen.width - 520f, Screen.height - 84f, 500f, 24f), weaponText);
             GUI.Label(new Rect(Screen.width - 520f, Screen.height - 60f, 500f, 24f), $"GRENADES  {grenades}    [1] rifle  [2] launcher");
             string help = weapon == Weapon.Launcher ? "RMB lock   LMB fire" : "RMB aim   R reload";
+            int team = AiSquads.AliveFollowing(Controlled);
+            if (team > 0) GUI.Label(new Rect(20f, Screen.height - 156f, 300f, 24f), $"FIRETEAM  {team}");
             if (CurrentStance != Stance.Stand)
             {
                 GUI.Label(new Rect(20f, Screen.height - 132f, 200f, 24f), CurrentStance == Stance.Crouch ? "CROUCHED" : "PRONE");
             }
-            GUI.Label(new Rect(20f, Screen.height - 60f, 700f, 24f), $"INFANTRY  {help}   G grenade   [{Plugin.CrouchKey.Value}] crouch  [{Plugin.ProneKey.Value}] prone   [{Plugin.ToggleKey.Value}] exit");
+            GUI.Label(new Rect(20f, Screen.height - 60f, 700f, 24f), $"INFANTRY  {help}   G grenade   [{Plugin.CrouchKey.Value}] crouch  [{Plugin.ProneKey.Value}] prone   [{Plugin.FireteamKey.Value}] fireteam   [{Plugin.ToggleKey.Value}] exit");
             GUI.color = prev;
         }
     }
