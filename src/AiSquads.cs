@@ -148,12 +148,11 @@ namespace NOInfantry
                 GroundVehicle t = ai.Riding;
                 if (t == null || t.disabled) return; // Transport.Tick dismounts the survivors
                 p.SetCollidable(false);
+                p.rb.isKinematic = true;
                 Transport.SetVisible(p, false);
                 Vector3 seat = Transport.Seat(t, ai.Seat);
                 p.transform.position = seat;
                 p.rb.position = seat;
-                p.rb.velocity = t.rb.velocity;
-                p.rb.angularVelocity = Vector3.zero;
                 p.rb.MoveRotation(Quaternion.Euler(0f, t.transform.eulerAngles.y + (ai.Seat % 2 == 0 ? -90f : 90f), 0f));
                 return;
             }

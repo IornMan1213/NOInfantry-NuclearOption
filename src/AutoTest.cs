@@ -717,7 +717,11 @@ namespace NOInfantry
             float followDist = TeamDistance(team, me.transform.position);
             Result("order follow", followDist < 15f, $"team {followDist:F1} m from the leader");
 
-            // Rally point where we stand (used later to redeploy as a medic).
+            // Rally point where we stand (used later to redeploy as a medic). Earlier steps' enemy test vehicles
+            // nearby would (correctly) block it, so clear them first.
+            foreach (Unit u in UnitRegistry.allUnits.Where(u => u is GroundVehicle && u.UniqueName != null && u.UniqueName.StartsWith("NOI Test") && u.NetworkHQ != hq).ToList())
+                Destroy(u.gameObject);
+            yield return new WaitForSecondsRealtime(0.5f);
             InputShim.Press(Plugin.RallyKey.Value);
             yield return new WaitForSecondsRealtime(1f);
             float rallyOff = GroundWar.LocalRally.HasValue ? Vector3.Distance(GroundWar.LocalRally.Value.ToLocalPosition(), me.transform.position) : -1f;
@@ -804,7 +808,7 @@ namespace NOInfantry
 
             // 7. Killed -> map, to redeploy (an overwhelming hit: no going down).
             me.TakeDamage(5000f, 0f, 0f, 0f, 0f, PersistentID.None);
-            yield return WaitUntil(() => DynamicMap.mapMaximized, 12f);
+            yield return WaitUntil(() => DynamicMap.mapMaximized, 15f);
             Result("death -> map", DynamicMap.mapMaximized && InfantryController.Controlled == null, $"map open {DynamicMap.mapMaximized}, infantry released {InfantryController.Controlled == null}");
             Shot("respawn_map");
         }

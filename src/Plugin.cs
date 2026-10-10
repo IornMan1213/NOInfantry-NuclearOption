@@ -11,7 +11,7 @@ namespace NOInfantry
     {
         public const string Guid = "jayea.noinfantry";
         public const string Name = "NO Infantry";
-        public const string Version = "0.7.0";
+        public const string Version = "0.8.0";
 
         internal static ManualLogSource Log;
         internal static string PluginDir;
@@ -194,7 +194,7 @@ namespace NOInfantry
             MotorPoolCooldown = Config.Bind("Ground War", "MotorPoolCooldown", 45f, "Seconds between vehicles per player");
             LastKit = Config.Bind("Ground War", "LastKit", 0, "Last kit chosen (0 Rifleman, 1 Anti-Tank, 2 Anti-Air, 3 Medic)");
 
-            TruckTransport = Config.Bind("Ground War", "TruckTransport", true, "AI front-line squads ride a truck toward the objective and dismount short of it (else they appear on foot nearby)");
+            TruckTransport = Config.Bind("Ground War", "TruckTransport", false, "EXPERIMENTAL (off: trucks were wrecked right after spawning in testing). AI front-line squads ride a truck toward the objective and dismount short of it; off = they arrive on foot");
             TransportVehicle = Config.Bind("Ground War", "TransportVehicle", "", "Vehicle name for troop trucks (empty = MSV MRAP or another stock troop carrier)");
             ConvoyDistance = Config.Bind("Ground War", "ConvoyStartDistance", 4000f, "How far from the objective the trucks start (on their own side)");
             DismountDistance = Config.Bind("Ground War", "DismountDistance", 500f, "Squads leave the truck this far from the objective's centre (or on contact)");

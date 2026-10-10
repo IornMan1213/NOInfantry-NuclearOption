@@ -1,5 +1,9 @@
 # NO Infantry: combined arms on foot for Nuclear Option
 
+> ## ⚠️ Canceled until further notice
+> Development of this mod is paused indefinitely. The code and the last build (v0.8.0) are published as-is;
+> there is no support and no further updates are planned for now. See *Known issues* below.
+
 A BepInEx mod that turns Nuclear Option into a combined-arms war that starts on the ground: deploy on foot
 with a kit, lead an AI fireteam, capture airbases with infantry alongside a living AI front line, pull a
 vehicle from the motor pool, commandeer ships, shoot down aircraft with a shoulder launcher, and take off
@@ -30,9 +34,9 @@ from the airbases you've won.
 - **Fireteam orders (T, then 1-5):** Follow me / Hold here / Move there (where you look) / Free roam
   (they go and take the next airbase) / Disband. If you die, your riflemen carry on by themselves.
 - **AI front line:** every couple of minutes each side sends a squad at the nearest airbase it doesn't
-  hold, and garrisons its own bases when enemy soldiers get in. Squads ride a truck (MSV MRAP) from up to
-  4 km out and dismount 500 m from the objective, on contact, or when the truck is hit (survivors bail out
-  hurt). Tune or switch off under `Ground War` in the config.
+  hold, and garrisons its own bases when enemy soldiers get in. Squads arrive on foot a short walk outside
+  the objective. Tune or switch off under `Ground War` in the config. (Troop trucks exist behind
+  `Ground War -> TruckTransport` but are experimental and off: see Known issues.)
 - **Motor pool (V, then 1-9):** at a friendly airbase, request a ground vehicle next to you, paid from your
   funds (cost and cooldown configurable). Then **E** to drive it to the front.
 
@@ -64,6 +68,14 @@ from the airbases you've won.
 ### In a vehicle or ship
 WASD drive, mouse aims the turrets (the green mark shows where the barrel actually points), LMB fires the guns,
 RMB zooms, E gets out.
+
+## Known issues (v0.8.0)
+- **Troop trucks** (`TruckTransport`, off by default): the truck is wrecked within ~2 s of spawning in testing
+  (it ends up below the terrain). The squads then bail out and continue on foot.
+- **Map after death:** the map is opened by the mod 4 s after you die; in one automated scenario (dying right
+  after redeploying as a medic) it did not open. Open the map yourself if that happens.
+- Some mod managers sync the plugins folder and remove `NOInfantry` if it isn't registered with them.
+- Heavy plugin sets slow loading a lot; the game may stutter for the first minute of a mission.
 
 ## How it works (for modders)
 - The ejected pilot (`PilotDismounted`) is reused as the soldier; its grounded logic is replaced while controlled.
@@ -103,7 +115,8 @@ Results go to `BepInEx/NOInfantry_autotest.txt` and screenshots to `BepInEx/NOIn
 It covers: spawn on foot, walk/sprint/jump, rifle hits, grenade, launcher vs ground and air targets
 (lock, launch, damage), driving and firing a ground vehicle, a ship's helm (throttle, steering direction,
 leaving the helm), the airbase aircraft menu, the hand-off when a new aircraft spawns, and F8 dismount.
-Current result: 39/39 passing (v0.7.0), including stances, an AI firefight and the Ground War step
+v0.8.0 results: single-player 43/47, ground-war step 19/21 (the failures are the issues above).
+v0.7.0 result: 39/39 passing, including stances, an AI firefight and the Ground War step
 (deploy on foot with a kit, capture strength, hold/move/follow orders, motor pool, AI front line, death -> map).
 Add `-noiGroundWarOnly` to run just the Ground War step.
 

@@ -96,6 +96,7 @@ namespace NOInfantry
             else if (EnemiesNear(soldier.NetworkHQ, soldier.transform.position, Plugin.RallyEnemyRadius.Value) > 0) refused = "enemies too close";
             if (refused != null)
             {
+                Plugin.Log.LogInfo($"Rally point refused for {PlayerLabel(player)}: {refused}");
                 NetSync.SendRallyTo(player, soldier.transform.position, placed: false, refused);
                 return refused;
             }

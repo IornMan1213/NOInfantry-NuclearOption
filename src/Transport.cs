@@ -87,7 +87,9 @@ namespace NOInfantry
         internal static Vector3 Seat(GroundVehicle truck, int i)
         {
             float h = truck.definition != null ? truck.definition.height : 2.5f;
-            return truck.transform.TransformPoint(new Vector3(i % 2 == 0 ? -0.55f : 0.55f, h * 0.55f, -0.8f - (i / 2) * 0.9f));
+            // Hidden riders sit well above the roof: any overlap with the hull (the game's pilot Setup re-enables
+            // their colliders for a step) wrecked the truck at spawn in testing.
+            return truck.transform.TransformPoint(new Vector3(i % 2 == 0 ? -0.55f : 0.55f, h + 2.5f, -0.8f - (i / 2) * 0.9f));
         }
 
         // Server, once a second.
@@ -101,7 +103,11 @@ namespace NOInfantry
 
                 GroundVehicle t = c.Truck;
                 string why = null;
-                if (t == null || t.disabled) why = "truck hit";
+                if (t == null || t.disabled)
+                {
+                    why = "truck hit";
+                    Plugin.Log.LogInfo($"Transport lost after {Time.time - c.Started:F1} s: {(t == null ? "destroyed object" : $"disabled, state {t.unitState}, globalY {t.transform.position.GlobalY():F1}, speed {t.speed:F1}")}");
+                }
                 else
                 {
                     float dist = Vector3.Distance(t.transform.position, c.Objective.center.position);
@@ -142,6 +148,7 @@ namespace NOInfantry
                 p.transform.position = g;
                 p.rb.position = g;
                 p.rb.velocity = t != null ? t.rb.velocity * 0.3f : Vector3.zero;
+                p.rb.isKinematic = false;
                 p.SetCollidable(true);
                 SetVisible(p, true);
                 ai.Riding = null;

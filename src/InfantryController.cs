@@ -287,7 +287,11 @@ namespace NOInfantry
         private System.Collections.IEnumerator MapAfterDeath()
         {
             yield return new WaitForSecondsRealtime(4f);
-            if (Controlled != null || AirbaseServices.HasNewAircraft() || DynamicMap.mapMaximized || GroundWar.OpenMenu != null) yield break;
+            if (Controlled != null || AirbaseServices.HasNewAircraft() || DynamicMap.mapMaximized || GroundWar.OpenMenu != null)
+            {
+                Plugin.Log.LogInfo($"Map after death skipped: soldier {Controlled != null}, new aircraft {AirbaseServices.HasNewAircraft()}, map open {DynamicMap.mapMaximized}, menu {GroundWar.OpenMenu != null}");
+                yield break;
+            }
             DynamicMap map = SceneSingleton<DynamicMap>.i;
             if (map == null) yield break;
             bool wasAllowed = DynamicMap.AllowedToOpen;

@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased (in testing)
+## 0.8.0 - final snapshot (development canceled until further notice)
+Tested in game: single-player 43/47, ground-war step 19/21. Known issues in the README.
+
 - Downed instead of dead: lethal hits put soldiers on foot down for 45 s; hold F to revive; AI riflemen revive you.
 - Medic kit: faster revives, bandages (F) for teammates or yourself.
 - Rally points (Y): a forward spawn per player, offered in the deploy panel; enemies overrun it.
-- Troop trucks: AI front-line squads ride an MSV MRAP and dismount near the objective, on contact, or when hit.
+- Troop trucks (experimental, off by default: trucks are wrecked right after spawning).
 - AI order/patrol points and server-side remote positions survive the game's floating-origin shifts.
 
 ## 0.7.0 - Ground War
